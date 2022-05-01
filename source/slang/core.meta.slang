@@ -744,7 +744,10 @@ for (int tt = 0; tt < kBaseTextureTypeCount; ++tt)
                             lodStr.append(")");
                         }
 
-                        String opStr = " = textureSize($0" + lodStr;
+                        String opStr = " = textureSize($0";
+                        if (!isMultisample)
+                            opStr.append(lodStr);
+
                         switch( access )
                         {
                         case SLANG_RESOURCE_ACCESS_READ_WRITE:
