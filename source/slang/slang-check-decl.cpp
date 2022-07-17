@@ -12,6 +12,8 @@
 
 #include "slang-lookup.h"
 
+#include "slang-syntax.h"
+
 namespace Slang
 {
         /// Visitor to transition declarations to `DeclCheckState::CheckedModifiers`
@@ -19,8 +21,8 @@ namespace Slang
         : public SemanticsDeclVisitorBase
         , public DeclVisitor<SemanticsDeclModifiersVisitor>
     {
-        SemanticsDeclModifiersVisitor(SharedSemanticsContext* shared)
-            : SemanticsDeclVisitorBase(shared)
+        SemanticsDeclModifiersVisitor(SemanticsContext const& outer)
+            : SemanticsDeclVisitorBase(outer)
         {}
 
         void visitDeclGroup(DeclGroup*) {}
@@ -35,8 +37,8 @@ namespace Slang
         : public SemanticsDeclVisitorBase
         , public DeclVisitor<SemanticsDeclHeaderVisitor>
     {
-        SemanticsDeclHeaderVisitor(SharedSemanticsContext* shared)
-            : SemanticsDeclVisitorBase(shared)
+        SemanticsDeclHeaderVisitor(SemanticsContext const& outer)
+            : SemanticsDeclVisitorBase(outer)
         {}
 
         void visitDecl(Decl*) {}
@@ -88,6 +90,8 @@ namespace Slang
 
         void visitStructDecl(StructDecl* decl);
 
+        void visitClassDecl(ClassDecl* decl);
+
             /// Get the type of the storage accessed by an accessor.
             ///
             /// The type of storage is determined by the parent declaration.
@@ -104,8 +108,8 @@ namespace Slang
         : public SemanticsDeclVisitorBase
         , public DeclVisitor<SemanticsDeclRedeclarationVisitor>
     {
-        SemanticsDeclRedeclarationVisitor(SharedSemanticsContext* shared)
-            : SemanticsDeclVisitorBase(shared)
+        SemanticsDeclRedeclarationVisitor(SemanticsContext const& outer)
+            : SemanticsDeclVisitorBase(outer)
         {}
 
         void visitDecl(Decl*) {}
@@ -125,8 +129,8 @@ namespace Slang
         : public SemanticsDeclVisitorBase
         , public DeclVisitor<SemanticsDeclBasesVisitor>
     {
-        SemanticsDeclBasesVisitor(SharedSemanticsContext* shared)
-            : SemanticsDeclVisitorBase(shared)
+        SemanticsDeclBasesVisitor(SemanticsContext const& outer)
+            : SemanticsDeclVisitorBase(outer)
         {}
 
         void visitDecl(Decl*) {}
@@ -147,6 +151,8 @@ namespace Slang
 
         void visitStructDecl(StructDecl* decl);
 
+        void visitClassDecl(ClassDecl* decl);
+
         void visitEnumDecl(EnumDecl* decl);
 
             /// Validate that the target type of an extension `decl` is valid.
@@ -159,8 +165,8 @@ namespace Slang
         : public SemanticsDeclVisitorBase
         , public DeclVisitor<SemanticsDeclBodyVisitor>
     {
-        SemanticsDeclBodyVisitor(SharedSemanticsContext* shared)
-            : SemanticsDeclVisitorBase(shared)
+        SemanticsDeclBodyVisitor(SemanticsContext const& outer)
+            : SemanticsDeclVisitorBase(outer)
         {}
 
         void visitDecl(Decl*) {}
@@ -265,6 +271,9 @@ namespace Slang
         /// Is `decl` a global shader parameter declaration?
     bool isGlobalShaderParameter(VarDeclBase* decl)
     {
+        // If it's an *actual* global it is not a global shader parameter
+        if (decl->hasModifier<ActualGlobalModifier>()) { return false; }
+        
         // A global shader parameter must be declared at global or namespace
         // scope, so that it has a single definition across the module.
         //
@@ -666,12 +675,12 @@ namespace Slang
         /// This call does *not* handle updating the state of `decl`; the
         /// caller takes responsibility for doing so.
         ///
-    static void _dispatchDeclCheckingVisitor(Decl* decl, DeclCheckState state, SharedSemanticsContext* shared);
+    static void _dispatchDeclCheckingVisitor(Decl* decl, DeclCheckState state, SemanticsContext const& shared);
 
     // Make sure a declaration has been checked, so we can refer to it.
     // Note that this may lead to us recursively invoking checking,
     // so this may not be the best way to handle things.
-    void SemanticsVisitor::ensureDecl(Decl* decl, DeclCheckState state)
+    void SemanticsVisitor::ensureDecl(Decl* decl, DeclCheckState state, SemanticsContext* baseContext)
     {
         // If the `decl` has already been checked up to or beyond `state`
         // then there is nothing for us to do.
@@ -690,6 +699,17 @@ namespace Slang
             // chain that leads from this declaration back to itself.
             //
             getSink()->diagnose(decl, Diagnostics::cyclicReference, decl);
+            return;
+        }
+
+        // If we should skip the checking, return now.
+        // A common case to skip checking is for the function bodies when we are in
+        // the language server. In that case we only care about the function bodies in a
+        // specific module and can skip checking the reference modules until they
+        // are being opened/edited later.
+        if (shouldSkipChecking(decl, state))
+        {
+            decl->setCheckState(state);
             return;
         }
 
@@ -727,7 +747,12 @@ namespace Slang
 
             // We now dispatch an appropriate visitor based on `nextState`.
             //
-            _dispatchDeclCheckingVisitor(decl, nextState, getShared());
+            // Note that we always dispatch the visitor in a "fresh" semantic-checking
+            // context, so that the state at the point where a declaration is *referenced*
+            // cannot affect the state in which the declaration is *checked*.
+            //
+            SemanticsContext subContext = baseContext ? SemanticsContext(*baseContext) : SemanticsContext(getShared());
+            _dispatchDeclCheckingVisitor(decl, nextState, subContext);
 
             // In the common case, the visitor will have done the necessary
             // checking, but will *not* have updated the `checkState` on
@@ -823,6 +848,48 @@ namespace Slang
         if (elementCount) return true;
 
         return true;
+    }
+
+    bool SemanticsVisitor::shouldSkipChecking(Decl* decl, DeclCheckState state)
+    {
+        if (state != DeclCheckState::Checked)
+            return false;
+        // If we are in language server, we should skip checking all the function bodies
+        // except for the module or function that the user cared about.
+        // This optimization helps reduce the response time.
+        if (!getLinkage()->isInLanguageServer())
+        {
+            return false;
+        }
+        if (auto funcDecl = as<FunctionDeclBase>(decl))
+        {
+            auto& assistInfo = getLinkage()->contentAssistInfo;
+            // If this func is not defined in the primary module, skip checking its body.
+            auto moduleDecl = getModuleDecl(decl);
+            if (moduleDecl && moduleDecl->getName() != assistInfo.primaryModuleName)
+                return true;
+            if (funcDecl->body)
+            {
+                auto humaneLoc = getLinkage()->getSourceManager()->getHumaneLoc(
+                    decl->loc, SourceLocType::Actual);
+                if (humaneLoc.pathInfo.foundPath != assistInfo.primaryModulePath)
+                {
+                    return true;
+                }
+                if (assistInfo.checkingMode == ContentAssistCheckingMode::Completion)
+                {
+                    // For completion requests, we skip all funtion bodies except for the one
+                    // that the current cursor is in.
+                    auto closingLoc = getLinkage()->getSourceManager()->getHumaneLoc(
+                        funcDecl->closingSourceLoc, SourceLocType::Actual);
+
+                    if (assistInfo.cursorLine < humaneLoc.line ||
+                        assistInfo.cursorLine > closingLoc.line)
+                        return true;
+                }
+            }
+        }
+        return false;
     }
 
     void SemanticsVisitor::_validateCircularVarDefinition(VarDeclBase* varDecl)
@@ -1002,6 +1069,11 @@ namespace Slang
         }
     }
 
+    void SemanticsDeclHeaderVisitor::visitClassDecl(ClassDecl* classDecl)
+    {
+        SLANG_UNUSED(classDecl);
+    }
+
     void SemanticsDeclBodyVisitor::checkVarDeclCommon(VarDeclBase* varDecl)
     {
         if (auto initExpr = varDecl->initExpr)
@@ -1175,8 +1247,8 @@ namespace Slang
         : public SemanticsDeclVisitorBase
         , public DeclVisitor<SemanticsDeclConformancesVisitor>
     {
-        SemanticsDeclConformancesVisitor(SharedSemanticsContext* shared)
-            : SemanticsDeclVisitorBase(shared)
+        SemanticsDeclConformancesVisitor(SemanticsContext const& outer)
+            : SemanticsDeclVisitorBase(outer)
         {}
 
         void visitDecl(Decl*) {}
@@ -2086,31 +2158,24 @@ namespace Slang
         // to the user as some kind of overload-resolution failure.
         //
         // In order to protect the user from whatever errors might
-        // occur, we will swap out the current diagnostic sink for
-        // a temporary one.
+        // occur, we will perform the checking in the context of
+        // a temporary diagnostic sink.
         //
-        DiagnosticSink* savedSink = m_shared->m_sink;
-        DiagnosticSink tempSink(savedSink->getSourceManager(), nullptr);
-        m_shared->m_sink = &tempSink;
+        DiagnosticSink tempSink(getSourceManager(), nullptr);
+        SemanticsVisitor subVisitor(withSink(&tempSink));
 
         // With our temporary diagnostic sink soaking up any messages
         // from overload resolution, we can now try to resolve
         // the call to see what happens.
         //
-        auto checkedCall = ResolveInvoke(synCall);
+        auto checkedCall = subVisitor.ResolveInvoke(synCall);
 
         // Of course, it is possible that the call went through fine,
         // but the result isn't of the type we expect/require,
         // so we also need to coerce the result of the call to
         // the expected type.
         //
-        auto coercedCall = coerce(resultType, checkedCall);
-
-        // Once we are done making our semantic checks, we can
-        // restore the original sink, so that subsequent operations
-        // report diagnostics as usual.
-        //
-        m_shared->m_sink = savedSink;
+        auto coercedCall = subVisitor.coerce(resultType, checkedCall);
 
         // If our overload resolution or type coercion failed,
         // then we have not been able to synthesize a witness
@@ -2378,9 +2443,8 @@ namespace Slang
             // `SemanticsVisitor` so that code can push/pop the emission
             // of diagnostics more easily.
             //
-            DiagnosticSink* savedSink = m_shared->m_sink;
-            DiagnosticSink tempSink(savedSink->getSourceManager(), nullptr);
-            m_shared->m_sink = &tempSink;
+            DiagnosticSink tempSink(getSourceManager(), nullptr);
+            SemanticsVisitor subVisitor(withSink(&tempSink));
 
             // We start by constructing an expression that represents
             // `this.name` where `name` is the name of the required
@@ -2413,11 +2477,13 @@ namespace Slang
             // general-purpose language features is unlikely to be as efficient
             // as special-case logic.
             //
-            auto synMemberRef = createLookupResultExpr(
+            auto synMemberRef = subVisitor.createLookupResultExpr(
                 requiredMemberDeclRef.getName(),
                 lookupResult,
                 synThis,
-                requiredMemberDeclRef.getLoc());
+                requiredMemberDeclRef.getLoc(),
+                nullptr);
+            synMemberRef->loc = requiredMemberDeclRef.getLoc();
 
             // The body of the accessor will depend on the class of the accessor
             // we are synthesizing (e.g., `get` vs. `set`).
@@ -2432,7 +2498,7 @@ namespace Slang
                 // which involves coercing the member access `this.name` to
                 // the expected type of the property.
                 //
-                auto coercedMemberRef = coerce(propertyType, synMemberRef);
+                auto coercedMemberRef = subVisitor.coerce(propertyType, synMemberRef);
                 auto synReturn = m_astBuilder->create<ReturnStmt>();
                 synReturn->expression = coercedMemberRef;
 
@@ -2459,7 +2525,7 @@ namespace Slang
                 synAssign->left = synMemberRef;
                 synAssign->right = synArgs[0];
 
-                auto synCheckedAssign = checkAssignWithCheckedOperands(synAssign);
+                auto synCheckedAssign = subVisitor.checkAssignWithCheckedOperands(synAssign);
 
                 auto synExprStmt = m_astBuilder->create<ExpressionStmt>();
                 synExprStmt->expression = synCheckedAssign;
@@ -2475,10 +2541,8 @@ namespace Slang
                 return false;
             }
 
-            // We restore the semantic checking state that was in place before
-            // we checked the synthesized accessor body, and then bail out
-            // if we ran into any errors (meaning that the synthesized accessor
-            // is not usable).
+            // We bail out if we ran into any errors (meaning that the synthesized
+            // accessor is not usable).
             //
             // TODO: If there were *warnings* emitted to the sink, it would probably
             // be good to show those warnings to the user, since they might indicate
@@ -2486,7 +2550,6 @@ namespace Slang
             // satisfying an `int` property requirement, but the user would probably
             // want to be warned when they do such a thing.
             //
-            m_shared->m_sink = savedSink;
             if(tempSink.getErrorCount() != 0)
                 return false;
 
@@ -2985,8 +3048,13 @@ namespace Slang
                 return true;
             }
         }
-
-        getSink()->diagnose(inheritanceDecl, Diagnostics::unimplemented, "type not supported for inheritance");
+        if (!as<ErrorType>(superType))
+        {
+            getSink()->diagnose(
+                inheritanceDecl,
+                Diagnostics::invalidTypeForInheritance,
+                superType);
+        }
         return false;
     }
 
@@ -3230,6 +3298,16 @@ namespace Slang
 
             _validateCrossModuleInheritance(decl, inheritanceDecl);
         }
+
+        if (decl->findModifier<ComInterfaceAttribute>())
+        {
+            // `associatedtype` declaration is not allowed in a COM interface declaration.
+            for (auto associatedType : decl->getMembersOfType<AssocTypeDecl>())
+            {
+                getSink()->diagnose(
+                    associatedType, Diagnostics::associatedTypeNotAllowInComInterface);
+            }
+        }
     }
 
     void SemanticsDeclBasesVisitor::visitStructDecl(StructDecl* decl)
@@ -3285,6 +3363,75 @@ namespace Slang
             else
             {
                 getSink()->diagnose(inheritanceDecl, Diagnostics::baseOfStructMustBeStructOrInterface, decl, baseType);
+                continue;
+            }
+
+            // TODO: At this point we have the `baseDeclRef`
+            // and could use it to perform further validity checks,
+            // and/or to build up a more refined representation of
+            // the inheritance graph for this type (e.g., a "class
+            // precedence list").
+            //
+            // E.g., we can/should check that we aren't introducing
+            // a circular inheritance relationship.
+
+            _validateCrossModuleInheritance(decl, inheritanceDecl);
+        }
+    }
+
+    void SemanticsDeclBasesVisitor::visitClassDecl(ClassDecl* decl)
+    {
+        // A `class` type can only inherit from `class` or `interface` types.
+        //
+        // Furthermore, only the first inheritance clause (in source
+        // order) is allowed to declare a base `class` type.
+        //
+        Index inheritanceClauseCounter = 0;
+        for (auto inheritanceDecl : decl->getMembersOfType<InheritanceDecl>())
+        {
+            Index inheritanceClauseIndex = inheritanceClauseCounter++;
+
+            ensureDecl(inheritanceDecl, DeclCheckState::CanUseBaseOfInheritanceDecl);
+            auto baseType = inheritanceDecl->base.type;
+
+            // It is possible that there was an error in checking the base type
+            // expression, and in such a case we shouldn't emit a cascading error.
+            //
+            if (auto baseErrorType = as<ErrorType>(baseType))
+            {
+                continue;
+            }
+
+            auto baseDeclRefType = as<DeclRefType>(baseType);
+            if (!baseDeclRefType)
+            {
+                getSink()->diagnose(inheritanceDecl, Diagnostics::baseOfClassMustBeClassOrInterface, decl, baseType);
+                continue;
+            }
+
+            auto baseDeclRef = baseDeclRefType->declRef;
+            if (auto baseInterfaceDeclRef = baseDeclRef.as<InterfaceDecl>())
+            {
+            }
+            else if (auto baseStructDeclRef = baseDeclRef.as<ClassDecl>())
+            {
+                // To simplify the task of reading and maintaining code,
+                // we require that when a `class` inherits from another
+                // `class`, the base `class` is the first item in
+                // the list of bases (before any interfaces).
+                //
+                // This constraint also has the secondary effect of restricting
+                // it so that a `struct` cannot multiply inherit from other
+                // `struct` types.
+                //
+                if (inheritanceClauseIndex != 0)
+                {
+                    getSink()->diagnose(inheritanceDecl, Diagnostics::baseClassMustBeListedFirst, decl, baseType);
+                }
+            }
+            else
+            {
+                getSink()->diagnose(inheritanceDecl, Diagnostics::baseOfClassMustBeClassOrInterface, decl, baseType);
                 continue;
             }
 
@@ -3603,17 +3750,17 @@ namespace Slang
         }
     }
 
-    void SemanticsVisitor::ensureDeclBase(DeclBase* declBase, DeclCheckState state)
+    void SemanticsVisitor::ensureDeclBase(DeclBase* declBase, DeclCheckState state, SemanticsContext* baseContext)
     {
         if(auto decl = as<Decl>(declBase))
         {
-            ensureDecl(decl, state);
+            ensureDecl(decl, state, baseContext);
         }
         else if(auto declGroup = as<DeclGroup>(declBase))
         {
             for(auto dd : declGroup->decls)
             {
-                ensureDecl(dd, state);
+                ensureDecl(dd, state, baseContext);
             }
         }
         else
@@ -4392,6 +4539,17 @@ namespace Slang
         {
             ensureDecl(paramDecl, DeclCheckState::ReadyForReference);
         }
+
+        auto errorType = decl->errorType;
+        if (errorType.exp)
+        {
+            errorType = CheckProperType(errorType);
+        }
+        else
+        {
+            errorType = TypeExp(m_astBuilder->getBottomType());
+        }
+        decl->errorType = errorType;
     }
 
     void SemanticsDeclHeaderVisitor::visitFuncDecl(FuncDecl* funcDecl)
@@ -4491,7 +4649,10 @@ namespace Slang
                 return;
             }
         }
-        getSink()->diagnose(decl->targetType.exp, Diagnostics::unimplemented, "an 'extension' can only extend a nominal type");
+        if (!as<ErrorType>(decl->targetType.type))
+        {
+            getSink()->diagnose(decl->targetType.exp, Diagnostics::invalidExtensionOnType, decl->targetType);
+        }
     }
 
     void SemanticsDeclBasesVisitor::visitExtensionDecl(ExtensionDecl* decl)
@@ -5034,7 +5195,7 @@ namespace Slang
             name,
             decl->moduleNameAndLoc.loc,
             getSink(),
-            m_shared->m_environmentModules);
+            getShared()->m_environmentModules);
 
         // If we didn't find a matching module, then bail out
         if (!importedModule)
@@ -5312,7 +5473,7 @@ namespace Slang
     }
 
 
-    static void _dispatchDeclCheckingVisitor(Decl* decl, DeclCheckState state, SharedSemanticsContext* shared)
+    static void _dispatchDeclCheckingVisitor(Decl* decl, DeclCheckState state, SemanticsContext const& shared)
     {
         switch(state)
         {
@@ -5340,6 +5501,51 @@ namespace Slang
             SemanticsDeclBodyVisitor(shared).dispatch(decl);
             break;
         }
+    }
+
+    static void _getCanonicalConstraintTypes(List<Type*>& outTypeList, Type* type)
+    {
+        if (auto andType = as<AndType>(type))
+        {
+            _getCanonicalConstraintTypes(outTypeList, andType->left);
+            _getCanonicalConstraintTypes(outTypeList, andType->right);
+        }
+        else
+        {
+            outTypeList.add(type);
+        }
+    }
+    OrderedDictionary<GenericTypeParamDecl*, List<Type*>> getCanonicalGenericConstraints(
+        DeclRef<ContainerDecl> genericDecl)
+    {
+        OrderedDictionary<GenericTypeParamDecl*, List<Type*>> genericConstraints;
+        for (auto mm : getMembersOfType<GenericTypeParamDecl>(genericDecl))
+        {
+            genericConstraints[mm.getDecl()] = List<Type*>();
+        }
+        for (auto genericTypeConstraintDecl : getMembersOfType<GenericTypeConstraintDecl>(genericDecl))
+        {
+            assert(
+                genericTypeConstraintDecl.getDecl()->sub.type->astNodeType ==
+                ASTNodeType::DeclRefType);
+            auto typeParamDecl = as<DeclRefType>(genericTypeConstraintDecl.getDecl()->sub.type)->declRef.getDecl();
+            List<Type*>* constraintTypes = genericConstraints.TryGetValue(typeParamDecl);
+            assert(constraintTypes);
+            constraintTypes->add(genericTypeConstraintDecl.getDecl()->getSup().type);
+        }
+
+        OrderedDictionary<GenericTypeParamDecl*, List<Type*>> result;
+        for (auto& constraints : genericConstraints)
+        {
+            List<Type*> typeList;
+            for (auto type : constraints.Value)
+            {
+                _getCanonicalConstraintTypes(typeList, type);
+            }
+            // TODO: we also need to sort the types within the list for each generic type param.
+            result[constraints.Key] = typeList;
+        }
+        return result;
     }
 
 }

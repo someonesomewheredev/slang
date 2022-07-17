@@ -10,6 +10,7 @@
 #include "slang-ir-collect-global-uniforms.h"
 #include "slang-ir-dce.h"
 #include "slang-ir-dll-import.h"
+#include "slang-ir-eliminate-phis.h"
 #include "slang-ir-entry-point-uniforms.h"
 #include "slang-ir-entry-point-raw-ptr-params.h"
 #include "slang-ir-explicit-global-context.h"
@@ -19,10 +20,13 @@
 #include "slang-ir-inline.h"
 #include "slang-ir-legalize-varying-params.h"
 #include "slang-ir-link.h"
+#include "slang-ir-com-interface.h"
 #include "slang-ir-lower-generics.h"
 #include "slang-ir-lower-tuple-types.h"
+#include "slang-ir-lower-result-type.h"
 #include "slang-ir-lower-bit-cast.h"
 #include "slang-ir-lower-reinterpret.h"
+#include "slang-ir-metadata.h"
 #include "slang-ir-optix-entry-point-uniforms.h"
 #include "slang-ir-restructure.h"
 #include "slang-ir-restructure-scoping.h"
@@ -33,11 +37,15 @@
 #include "slang-ir-specialize-resources.h"
 #include "slang-ir-ssa.h"
 #include "slang-ir-ssa-simplification.h"
+#include "slang-ir-strip-cached-dict.h"
 #include "slang-ir-strip-witness-tables.h"
 #include "slang-ir-synthesize-active-mask.h"
 #include "slang-ir-union.h"
 #include "slang-ir-validate.h"
 #include "slang-ir-wrap-structured-buffers.h"
+#include "slang-ir-liveness.h"
+#include "slang-ir-glsl-liveness.h"
+
 #include "slang-legalize-types.h"
 #include "slang-lower-to-ir.h"
 #include "slang-mangle.h"
@@ -170,6 +178,8 @@ Result linkAndOptimizeIR(
     auto target = codeGenContext->getTargetFormat();
     auto targetRequest = codeGenContext->getTargetReq();
 
+    // Get the artifact desc for the target 
+    const auto artifactDesc = ArtifactDesc::makeFromCompileTarget(asExternal(target));
 
     // We start out by performing "linking" at the level of the IR.
     // This step will create a fresh IR module to be used for
@@ -193,6 +203,21 @@ Result linkAndOptimizeIR(
     // IR, then do it here, for the target-specific, but
     // un-specialized IR.
     dumpIRIfEnabled(codeGenContext, irModule);
+
+    switch (target)
+    {
+        case CodeGenTarget::CPPSource:
+        case CodeGenTarget::HostCPPSource:
+        {
+            lowerComInterfaces(irModule, artifactDesc.style, sink);
+            generateDllImportFuncs(irModule, sink);
+            break;
+        }
+        default: break;
+    }
+
+    // Lower `Result<T,E>` types into ordinary struct types.
+    lowerResultType(irModule, sink);
 
     // Replace any global constants with their values.
     //
@@ -484,9 +509,9 @@ Result linkAndOptimizeIR(
         {
             wrapStructuredBuffersOfMatrices(irModule);
 #if 0
-                dumpIRIfEnabled(codeGenContext, irModule, "STRUCTURED BUFFERS WRAPPED");
+            dumpIRIfEnabled(codeGenContext, irModule, "STRUCTURED BUFFERS WRAPPED");
 #endif
-                validateIRModuleIfEnabled(codeGenContext, irModule);
+            validateIRModuleIfEnabled(codeGenContext, irModule);
         }
         break;
 
@@ -683,14 +708,7 @@ Result linkAndOptimizeIR(
         break;
     }
 
-    switch (target)
-    {
-    default:
-        break;
-    case CodeGenTarget::HostCPPSource:
-        generateDllImportFuncs(irModule, sink);
-        break;
-    }
+    stripCachedDictionaries(irModule);
 
     // TODO: our current dynamic dispatch pass will remove all uses of witness tables.
     // If we are going to support function-pointer based, "real" modular dynamic dispatch,
@@ -728,6 +746,78 @@ Result linkAndOptimizeIR(
     lowerBitCast(targetRequest, irModule);
     simplifyIR(irModule);
 
+    {
+        // Get the liveness mode.
+        const LivenessMode livenessMode = codeGenContext->shouldTrackLiveness() ? LivenessMode::Enabled : LivenessMode::Disabled;
+        
+        //
+        // Downstream targets may benefit from having live-range information for
+        // local variables, and our IR currently encodes a reasonably good version
+        // of that information. At this point we will insert live-range markers
+        // for local variables, on when such markers are requested.
+        //
+        // After this point in optimization, any passes that introduce new
+        // temporary variables into the IR module should take responsibility for
+        // producing their own live-range information.
+        //
+        if (isEnabled(livenessMode))
+        {
+            LivenessUtil::addVariableRangeStarts(irModule, livenessMode);
+        }
+
+        // As a late step, we need to take the SSA-form IR and move things *out*
+        // of SSA form, by eliminating all "phi nodes" (block parameters) and
+        // introducing explicit temporaries instead. Doing this at the IR level
+        // means that subsequent emit logic doesn't need to contend with the
+        // complexities of blocks with parameters.
+        //
+
+        {
+            // We only want to accumulate locations if liveness tracking is enabled.
+            eliminatePhis(codeGenContext, livenessMode, irModule);
+#if 0
+            dumpIRIfEnabled(codeGenContext, irModule, "PHIS ELIMINATED");
+#endif
+        }
+
+        // If liveness is enabled add liveness ranges based on the accumulated liveness locations
+
+        if (isEnabled(livenessMode))
+        {
+            LivenessUtil::addRangeEnds(irModule, livenessMode);
+
+#if 0
+            dumpIRIfEnabled(codeGenContext, irModule, "LIVENESS");
+#endif
+        }
+    }
+
+    // TODO: We need to insert the logic that fixes variable scoping issues
+    // here (rather than doing it very late in the emit process), because
+    // otherwise the `applyGLSLLiveness()` operation below wouldn't be
+    // able to see the live-range information that pass would need to add.
+    // For now we are avoiding that problem by simply *not* emitting live-range
+    // information when we fix variable scoping later on.
+
+    // Depending on the target, certain things that were represented as
+    // single IR instructions will need to be emitted with the help of
+    // function declaratons in output high-level code.
+    //
+    // One example of this is the live-range information, which needs
+    // to be output to GLSL code that uses a glslang extension for
+    // supporting function declarations that map directly to SPIR-V opcodes.
+    //
+    // We execute a pass here to transform any live-range instructions
+    // in the module into function calls, for the targets that require it.
+    //
+    if (codeGenContext->shouldTrackLiveness())
+    {
+        if (isKhronosTarget(targetRequest))
+        {
+            applyGLSLLiveness(irModule);
+        }
+    }
+
     // We include one final step to (optionally) dump the IR and validate
     // it after all of the optimization passes are complete. This should
     // reflect the IR that code is generated from as closely as possible.
@@ -737,19 +827,18 @@ Result linkAndOptimizeIR(
 #endif
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
+    outLinkedIR.metadata = new PostEmitMetadata();
+    collectMetadata(irModule, *outLinkedIR.metadata);
+
     return SLANG_OK;
 }
 
-void trackGLSLTargetCaps(
-    GLSLExtensionTracker*   extensionTracker,
-    CapabilitySet const&    caps);
-
 SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
-    String&                 outSource)
+    String&                 outSource,
+    RefPtr<PostEmitMetadata>& outMetadata)
 {
     outSource = String();
 
-    auto extensionTracker = getExtensionTracker();
     auto session = getSession();
     auto sink = getSink();
     auto sourceManager = getSourceManager();
@@ -851,6 +940,8 @@ SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
 
         auto irModule = linkedIR.module;
 
+        outMetadata = linkedIR.metadata;
+
         // After all of the required optimization and legalization
         // passes have been performed, we can emit target code from
         // the IR module.
@@ -869,51 +960,57 @@ SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
     // Now that we've emitted the code for all the declarations in the file,
     // it is time to stitch together the final output.
 
-    sourceEmitter->emitPreludeDirectives();
-
-    if (isHeterogeneousTarget(target))
-    {
-        sourceWriter.emit(get_slang_cpp_host_prelude());
-    }
-    else
-    {
-        // If there is a prelude emit it
-        const auto& prelude = session->getPreludeForLanguage(sourceLanguage);
-        if (prelude.getLength() > 0)
-        {
-            sourceWriter.emit(prelude.getUnownedSlice());
-        }
-    }
-
     // There may be global-scope modifiers that we should emit now
     // Supress emitting line directives when emitting preprocessor directives since
     // these preprocessor directives may be required to appear in the first line
     // of the output. An example is that the "#version" line in a GLSL source must
     // appear before anything else.
     sourceWriter.supressLineDirective();
-    sourceEmitter->emitPreprocessorDirectives();
-    sourceWriter.resumeLineDirective();
+    
+    // When emitting front matter we can emit the target-language-specific directives
+    // needed to get the default matrix layout to match what was requested
+    // for the given target.
+    //
+    // Note: we do not rely on the defaults for the target language,
+    // because a user could take the HLSL/GLSL generated by Slang and pass
+    // it to another compiler with non-default options specified on
+    // the command line, leading to all kinds of trouble.
+    //
+    // TODO: We need an approach to "global" layout directives that will work
+    // in the presence of multiple modules. If modules A and B were each
+    // compiled with different assumptions about how layout is performed,
+    // then types/variables defined in those modules should be emitted in
+    // a way that is consistent with that layout...
 
-    if (auto glslExtensionTracker = as<GLSLExtensionTracker>(extensionTracker))
+    // Emit any front matter
+    sourceEmitter->emitFrontMatter(targetRequest);
+
+    // If heterogeneous we output the prelude before everything else 
+    if (isHeterogeneousTarget(target))
     {
-        trackGLSLTargetCaps(glslExtensionTracker, targetRequest->getTargetCaps());
-
-        StringBuilder builder;
-        glslExtensionTracker->appendExtensionRequireLines(builder);
-        sourceWriter.emit(builder.getUnownedSlice());
+        sourceWriter.emit(get_slang_cpp_host_prelude());
+    }
+    else
+    {
+        // Get the prelude
+        String prelude = session->getPreludeForLanguage(sourceLanguage);
+        sourceWriter.emit(prelude);
     }
 
-    sourceEmitter->emitLayoutDirectives(targetRequest);
+    // Emit anything that goes before the contents of the code generated for the module
+    sourceEmitter->emitPreModule();
 
-    String prefix = sourceWriter.getContent();
-    
-    StringBuilder finalResultBuilder;
-    finalResultBuilder << prefix;
+    sourceWriter.resumeLineDirective();
 
-    finalResultBuilder << code;
+    // Get the content built so far from the front matter/prelude/preModule
+    // By getting in this way, the content is no longer referenced by the sourceWriter.
+    String finalResult = sourceWriter.getContentAndClear();
+
+    // Append the modules output code
+    finalResult.append(code);
 
     // Write out the result
-    outSource = finalResultBuilder.ProduceString();
+    outSource = finalResult;
     return SLANG_OK;
 }
 
@@ -925,7 +1022,8 @@ SlangResult emitSPIRVFromIR(
 
 SlangResult emitSPIRVForEntryPointsDirectly(
     CodeGenContext* codeGenContext,
-    List<uint8_t>&  spirvOut)
+    List<uint8_t>&  spirvOut,
+    RefPtr<PostEmitMetadata>& outMetadata)
 {
     // Outside because we want to keep IR in scope whilst we are processing emits
     LinkedIR linkedIR;
@@ -939,6 +1037,8 @@ SlangResult emitSPIRVForEntryPointsDirectly(
     auto irEntryPoints = linkedIR.entryPoints;
 
     emitSPIRVFromIR(codeGenContext, irModule, irEntryPoints, spirvOut);
+
+    outMetadata = linkedIR.metadata;
 
     return SLANG_OK;
 }

@@ -80,6 +80,9 @@ namespace Slang
         {
             if (inst->getOp() == kIROp_InterfaceType)
             {
+                if (inst->findDecoration<IRComInterfaceDecoration>())
+                    continue;
+
                 interfaceInsts.add(inst);
             }
         }
@@ -106,6 +109,7 @@ namespace Slang
             return;
 
         sharedContext->sharedBuilderStorage.deduplicateAndRebuildGlobalNumberingMap();
+        sharedContext->mapInterfaceRequirementKeyValue.Clear();
 
         specializeRTTIObjectReferences(sharedContext);
 
@@ -133,7 +137,11 @@ namespace Slang
                 if (auto lookupWitnessMethod = as<IRLookupWitnessMethod>(inst))
                 {
                     auto witnessTableType = lookupWitnessMethod->getWitnessTable()->getDataType();
+                    if (!witnessTableType)
+                        return;
                     auto interfaceType = cast<IRWitnessTableType>(witnessTableType)->getConformanceType();
+                    if (isComInterfaceType((IRType*)interfaceType))
+                        return;
                     if (!implementedInterfaces.Contains(interfaceType))
                     {
                         context->sink->diagnose(interfaceType->sourceLoc, Diagnostics::noTypeConformancesFoundForInterface, interfaceType);

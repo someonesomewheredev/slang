@@ -39,7 +39,7 @@ namespace Slang
             if (auto ptrType = as<IRPtrTypeBase>(paramType))
             {
                 paramValType = ptrType->getValueType();
-            }
+            } 
             auto argType = arg->getDataType();
             if (auto argPtrType = as<IRPtrTypeBase>(argType))
             {
@@ -274,6 +274,13 @@ namespace Slang
         {
             // If we see a call(lookup_interface_method(...), ...), we need to translate
             // all occurences of associatedtypes.
+
+            // If `w` in `lookup_interface_method(w, ...)` is a COM interface, bail.
+            if (isComInterfaceType(lookupInst->getWitnessTable()->getDataType()))
+            {
+                return;
+            }
+
             auto interfaceType = cast<IRInterfaceType>(
                 cast<IRWitnessTableTypeBase>(lookupInst->getWitnessTable()->getDataType())
                     ->getConformanceType());

@@ -16,6 +16,10 @@ class DeclGroup: public DeclBase
     List<Decl*> decls;
 };
 
+class UnresolvedDecl : public Decl
+{
+    SLANG_AST_CLASS(UnresolvedDecl)
+};
 
 // A "container" decl is a parent to other declarations
 class ContainerDecl: public Decl
@@ -23,6 +27,7 @@ class ContainerDecl: public Decl
     SLANG_ABSTRACT_AST_CLASS(ContainerDecl)
 
     List<Decl*> members;
+    SourceLoc closingSourceLoc;
 
     template<typename T>
     FilteredMemberList<T> getMembersOfType()
@@ -266,6 +271,9 @@ class CallableDecl : public ContainerDecl
     }
 
     TypeExp returnType;
+        
+    // If this callable throws an error code, `errorType` is the type of the error code.
+    TypeExp errorType;
 
     // Fields related to redeclaration, so that we
     // can support multiple specialized variations
@@ -397,6 +405,9 @@ class ImportDecl : public Decl
     
     // The module that actually got imported
     ModuleDecl* importedModuleDecl = nullptr;
+
+    SourceLoc startLoc;
+    SourceLoc endLoc;
 
     SLANG_UNREFLECTED
     // The scope that we want to import into

@@ -349,7 +349,14 @@ struct SPIRVEmitContext
 
         // > Version nuumber
         //
-        m_words.add(SpvVersion);
+
+        // TODO(JS): 
+        // Was previously set to SpvVersion, but that doesn't work since we 
+        // upgraded to SPIR-V headers 1.6. (It would lead to validation errors during vk tests)
+        // For now mark as version 1.5.0
+
+        static const uint32_t spvVersion1_5_0 = 0x00010500;
+        m_words.add(spvVersion1_5_0);
 
         // > Generator's magic number.
         // > Its value does not affect any semantics, and is allowed to be 0.
@@ -1612,11 +1619,16 @@ struct SPIRVEmitContext
         case kIROp_Rsh:
         case kIROp_Lsh:
             return emitArithmetic(parent, inst);
-        case kIROp_ReturnVal:
-            return emitInst(
-                parent, inst, SpvOpReturnValue, as<IRReturnVal>(inst)->getVal());
-        case kIROp_ReturnVoid:
-            return emitInst(parent, inst, SpvOpReturn);
+        case kIROp_Return:
+            if (as<IRReturn>(inst)->getVal()->getOp() == kIROp_VoidLit)
+            {
+                return emitInst(parent, inst, SpvOpReturn);
+            }
+            else
+            {
+                return emitInst(
+                    parent, inst, SpvOpReturnValue, as<IRReturn>(inst)->getVal());
+            }
         case kIROp_discard:
             return emitInst(parent, inst, SpvOpKill);
         case kIROp_unconditionalBranch:

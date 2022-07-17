@@ -2,6 +2,7 @@
 
 #include "../compiler-core/slang-name.h"
 #include "slang-syntax.h"
+#include "slang-check.h"
 
 namespace Slang
 {
@@ -36,11 +37,8 @@ namespace Slang
         context->sb.append(value);
     }
 
-    void emitName(
-        ManglingContext*    context,
-        Name*               name)
+    void emitNameImpl(ManglingContext* context, UnownedStringSlice str)
     {
-        String str = getText(name);
         Index length = str.getLength();
 
         // If the name consists of only traditional "identifer characters"
@@ -49,10 +47,14 @@ namespace Slang
         bool allAllowed = true;
         for (auto c : str)
         {
-            if (('a' <= c) && (c <= 'z'))   continue;
-            if (('A' <= c) && (c <= 'Z'))   continue;
-            if (('0' <= c) && (c <= '9'))   continue;
-            if (c == '_')                   continue;
+            if (('a' <= c) && (c <= 'z'))
+                continue;
+            if (('A' <= c) && (c <= 'Z'))
+                continue;
+            if (('0' <= c) && (c <= '9'))
+                continue;
+            if (c == '_')
+                continue;
 
             allAllowed = false;
             break;
@@ -83,9 +85,8 @@ namespace Slang
             //
             for (auto c : str)
             {
-                if (('a' <= c) && (c <= 'z')
-                    || ('A' <= c) && (c <= 'Z')
-                    || ('0' <= c) && (c <= '9'))
+                if (('a' <= c) && (c <= 'z') || ('A' <= c) && (c <= 'Z') ||
+                    ('0' <= c) && (c <= '9'))
                 {
                     encoded.append(c);
                 }
@@ -116,6 +117,14 @@ namespace Slang
         //
         // Realistically, that is best dealt with as a quirk of tha particular
         // target, rather than adding complexity here.
+    }
+
+    void emitName(
+        ManglingContext*    context,
+        Name*               name)
+    {
+        String str = getText(name);
+        emitNameImpl(context, str.getUnownedSlice());
     }
 
     void emitVal(
@@ -330,6 +339,12 @@ namespace Slang
             return;
         }
 
+        // TODO: we should special case GenericTypeParamDecl and GenericValueParamDecl nodes
+        // instead of just dumping their names here to avoid the name of a generic parameter
+        // to have affect the binary signature.
+        // For each generic parameter, we should assign it a unique ID (i, j), where i is the
+        // nesting level of the generic, and j is the sequential order of the parameter within
+        // its generic parent, and use this 2D ID to refer to such a parameter.
         emitName(context, declRef.getName());
 
         // Special case: accessors need some way to distinguish themselves
@@ -392,26 +407,34 @@ namespace Slang
                 }
 
                 emit(context, genericParameterCount);
-                for( auto mm : getMembers(parentGenericDeclRef) )
+
+                OrderedDictionary<GenericTypeParamDecl*, List<Type*>> genericConstraints;
+                for (auto mm : getMembers(parentGenericDeclRef))
                 {
-                    if(auto genericTypeParamDecl = mm.as<GenericTypeParamDecl>())
+                    if (auto genericTypeParamDecl = mm.as<GenericTypeParamDecl>())
                     {
                         emitRaw(context, "T");
                     }
-                    else if(auto genericValueParamDecl = mm.as<GenericValueParamDecl>())
+                    else if (auto genericValueParamDecl = mm.as<GenericValueParamDecl>())
                     {
                         emitRaw(context, "v");
                         emitType(context, getType(context->astBuilder, genericValueParamDecl));
                     }
-                    else if(mm.as<GenericTypeConstraintDecl>())
+                    else
+                    {}
+                }
+
+                auto canonicalizedConstraints = getCanonicalGenericConstraints(parentGenericDeclRef);
+                for (auto& constraint : canonicalizedConstraints)
+                {
+                    for (auto type : constraint.Value)
                     {
                         emitRaw(context, "C");
-                        // TODO: actually emit info about the constraint
-                    }
-                    else
-                    {
+                        emitQualifiedName(context, DeclRef<Decl>(constraint.Key, nullptr));
+                            emitType(context, type);
                     }
                 }
+
             }
         }
 
@@ -575,6 +598,13 @@ namespace Slang
     {
         ManglingContext context(astBuilder);
         emitType(&context, type);
+        return context.sb.ProduceString();
+    }
+
+    String getMangledNameFromNameString(const UnownedStringSlice& name)
+    {
+        ManglingContext context(nullptr);
+        emitNameImpl(&context, name);
         return context.sb.ProduceString();
     }
 

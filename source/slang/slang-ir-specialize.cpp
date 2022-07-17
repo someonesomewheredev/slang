@@ -79,6 +79,17 @@ struct SpecializationContext
         if(inst->getOp() == kIROp_InterfaceRequirementEntry)
             return true;
 
+        // A generic parameter is never specialized.
+        switch (inst->getOp())
+        {
+        case kIROp_GlobalGenericParam:
+            return false;
+        case kIROp_Param:
+            if (inst->getParent() && inst->getParent()->getOp() == kIROp_Block &&
+                inst->getParent()->getParent() &&
+                inst->getParent()->getParent()->getOp() == kIROp_Generic)
+                return false;
+        }
         return fullySpecializedInsts.Contains(inst);
     }
 
@@ -113,6 +124,14 @@ struct SpecializationContext
     void addToWorkList(
         IRInst* inst)
     {
+#if 0
+        // Note(Yong): we should no longer ignore generic functions
+        // because they maybe called via dynamic dispatch.
+        // We still want to specialize calls inside a generic function
+        // if we can derive its type at compile time. The following
+        // skipping logic is disabled and we should consider remove it.
+        //
+        // 
         // We will ignore any code that is nested under a generic,
         // because it doesn't make sense to perform specialization
         // on such code.
@@ -122,6 +141,7 @@ struct SpecializationContext
             if(as<IRGeneric>(ii))
                 return;
         }
+#endif
 
         if (workList.Add(inst))
         {
@@ -623,6 +643,76 @@ struct SpecializationContext
         }
         return nullptr;
     }
+    template<typename TDict>
+    void _readSpecializationDictionaryImpl(TDict& dict, IRInst* dictInst)
+    {
+        for (auto child : dictInst->getChildren())
+        {
+            auto item = as<IRSpecializationDictionaryItem>(child);
+            if (!item) continue;
+            IRSimpleSpecializationKey key;
+            bool shouldSkip = false;
+            for (UInt i = 1; i < item->getOperandCount(); i++)
+            {
+                if (item->getOperand(i) == nullptr)
+                {
+                    shouldSkip = true;
+                    break;
+                }
+                key.vals.add(item->getOperand(i));
+            }
+            if (shouldSkip)
+                continue;
+            auto value = as<typename std::remove_pointer<typename TDict::ValueType>::type>(item->getOperand(0));
+            SLANG_ASSERT(value);
+            dict[key] = value;
+        }
+        dictInst->removeAndDeallocate();
+    }
+    void readSpecializationDictionaries()
+    {
+        auto moduleInst = module->getModuleInst();
+        for (auto child : moduleInst->getChildren())
+        {
+            switch (child->getOp())
+            {
+            case kIROp_GenericSpecializationDictionary:
+                _readSpecializationDictionaryImpl(genericSpecializations, child);
+                break;
+            case kIROp_ExistentialFuncSpecializationDictionary:
+                _readSpecializationDictionaryImpl(existentialSpecializedFuncs, child);
+                break;
+            case kIROp_ExistentialTypeSpecializationDictionary:
+                _readSpecializationDictionaryImpl(existentialSpecializedStructs, child);
+                break;
+            default:
+                continue;
+            }
+        }
+    }
+
+    template<typename TDict>
+    void _writeSpecializationDictionaryImpl(TDict& dict, IROp dictOp, IRInst* moduleInst)
+    {
+        IRBuilder builder(&sharedBuilderStorage);
+        builder.setInsertInto(moduleInst);
+        auto dictInst = builder.emitIntrinsicInst(nullptr, dictOp, 0, nullptr);
+        builder.setInsertInto(dictInst);
+        for (auto kv : dict)
+        {
+            List<IRInst*> args;
+            args.add(kv.Value);
+            args.addRange(kv.Key.vals);
+            builder.emitIntrinsicInst(nullptr, kIROp_SpecializationDictionaryItem, args.getCount(), args.getBuffer());
+        }
+    }
+    void writeSpecializationDictionaries()
+    {
+        auto moduleInst = module->getModuleInst();
+        _writeSpecializationDictionaryImpl(genericSpecializations, kIROp_GenericSpecializationDictionary, moduleInst);
+        _writeSpecializationDictionaryImpl(existentialSpecializedFuncs, kIROp_ExistentialFuncSpecializationDictionary, moduleInst);
+        _writeSpecializationDictionaryImpl(existentialSpecializedStructs, kIROp_ExistentialTypeSpecializationDictionary, moduleInst);
+    }
 
     // All of the machinery for generic specialization
     // has been defined above, so we will now walk
@@ -636,6 +726,11 @@ struct SpecializationContext
         //
         SharedIRBuilder* sharedBuilder = &sharedBuilderStorage;
         sharedBuilder->init(module);
+
+        // Read specialization dictionary from module if it is defined.
+        // This prevents us from generating duplicated specializations
+        // when this pass is invoked iteratively.
+        readSpecializationDictionaries();
 
         // The unspecialized IR we receive as input will have
         // `IRBindGlobalGenericParam` instructions that associate
@@ -733,9 +828,15 @@ struct SpecializationContext
 
         // Once the work list has gone dry, we should have the invariant
         // that there are no `specialize` instructions inside of non-generic
-        // functions that in turn reference a generic type/function, *except*
-        // in the case where that generic is for a builtin type/function, in
-        // which case we wouldn't want to specialize it anyway.
+        // functions that in turn reference a generic type/function unless the generic is for a
+        // builtin type/function, or some of the type arguments are unknown at compile time, in
+        // which case we will rely on a follow up pass the translate it into a dynamic dispatch
+        // function.
+
+        // For functions that still have `specialize` uses left, we need to preserve the
+        // its specializations in resulting IR so they can be reconstructed when this
+        // specialization pass gets invoked again.
+        writeSpecializationDictionaries();
     }
 
     void addDirtyInstsToWorkListRec(IRInst* inst)
@@ -1122,6 +1223,7 @@ struct SpecializationContext
             case kIROp_Call:
             case kIROp_ExtractExistentialType:
             case kIROp_CreateExistentialObject:
+            case kIROp_Param:
                 return false;
             default:
                 break;
@@ -2170,7 +2272,7 @@ IRInst* specializeGenericImpl(
             // We thus use that cloned value as the result of the
             // specialization step.
             //
-            if( auto returnValInst = as<IRReturnVal>(ii) )
+            if( auto returnValInst = as<IRReturn>(ii) )
             {
                 auto specializedVal = findCloneForOperand(&env, returnValInst->getVal());
 
@@ -2222,6 +2324,5 @@ IRInst* specializeGeneric(
 
     return specializeGenericImpl(baseGeneric, specializeInst, module, nullptr);
 }
-
 
 } // namespace Slang

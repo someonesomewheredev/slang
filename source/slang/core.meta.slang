@@ -71,6 +71,11 @@ syntax snorm : SNormModifier;
 ///
 syntax __extern_cpp : ExternCppModifier;
 
+/// Modifer to mark a function for forward-mode differentiation.
+/// i.e. the compiler will automatically generate a new function
+/// that computes the jacobian-vector product of the original.
+syntax __differentiate_jvp : JVPDerivativeModifier;
+
 /// A type that can be used as an operand for builtins
 [sealed]
 [builtin]
@@ -376,6 +381,11 @@ struct Ref
 __magic_type(StringType)
 __intrinsic_type($(kIROp_StringType))
 struct String
+{};
+
+__magic_type(NativeStringType)
+__intrinsic_type($(kIROp_NativeStringType))
+struct NativeString
 {};
 
 __magic_type(DynamicType)
@@ -2062,6 +2072,9 @@ attribute_syntax [vk_location(locaiton : int)] : GLSLLocationAttribute;
 __attributeTarget(VarDeclBase)
 attribute_syntax [vk_index(index : int)] : GLSLIndexAttribute;
 
+__attributeTarget(FuncDecl)
+attribute_syntax [vk_spirv_instruction(op : int)]                   : SPIRVInstructionOpAttribute;
+
 // Statement Attributes
 
 __attributeTarget(LoopStmt)
@@ -2177,6 +2190,8 @@ attribute_syntax [__unsafeForceInlineEarly] : UnsafeForceInlineEarlyAttribute;
 __attributeTarget(FuncDecl)
 attribute_syntax [DllImport(modulePath: String)] : DllImportAttribute;
 
+__attributeTarget(InterfaceDecl)
+attribute_syntax [COM] : ComInterfaceAttribute;
 
 // Inheritance Control
 __attributeTarget(AggTypeDecl)
@@ -2200,3 +2215,6 @@ attribute_syntax [noinline] : NoInlineAttribute;
 __attributeTarget(StructDecl)
 attribute_syntax [payload] : PayloadAttribute;
 
+// Custom JVP Function reference
+__attributeTarget(FuncDecl)
+attribute_syntax [__custom_jvp(function)]   : CustomJVPAttribute;

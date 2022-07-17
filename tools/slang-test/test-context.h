@@ -162,8 +162,10 @@ class TestContext
 
     void setTestReporter(TestReporter* reporter);
     TestReporter* getTestReporter();
+    SlangResult createLanguageServerJSONRPCConnection(Slang::RefPtr<Slang::JSONRPCConnection>& out);
 
     std::mutex mutex;
+    Slang::RefPtr<Slang::JSONRPCConnection> m_languageServerConnection;
 
 protected:
     SlangResult _createJSONRPCConnection(Slang::RefPtr<Slang::JSONRPCConnection>& out);

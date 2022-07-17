@@ -7,6 +7,8 @@
 #include "slang-ir.h"
 #include "slang-ir-constexpr.h"
 #include "slang-ir-dce.h"
+#include "slang-ir-diff-call.h"
+#include "slang-ir-diff-jvp.h"
 #include "slang-ir-inline.h"
 #include "slang-ir-insts.h"
 #include "slang-ir-missing-return.h"
@@ -16,6 +18,7 @@
 #include "slang-ir-validate.h"
 #include "slang-ir-string-hash.h"
 #include "slang-ir-clone.h"
+#include "slang-ir-lower-error-handling.h"
 
 #include "slang-mangle.h"
 #include "slang-type-layout.h"
@@ -80,7 +83,8 @@ struct SubscriptInfo : ExtendedValueInfo
 struct BoundStorageInfo;
 struct BoundMemberInfo;
 struct SwizzledLValueInfo;
-
+struct CopiedValInfo;
+struct ExtractedExistentialValInfo;
 
 // This type is our core representation of lowered values.
 // In the simple case, it just wraps an `IRInst*`.
@@ -113,6 +117,9 @@ struct LoweredValInfo
 
         // The result of applying swizzling to an l-value
         SwizzledLValue,
+
+        // The value extracted from an opened existential
+        ExtractedExistential,
     };
 
     union
@@ -184,6 +191,15 @@ struct LoweredValInfo
     {
         SLANG_ASSERT(flavor == Flavor::SwizzledLValue);
         return (SwizzledLValueInfo*)ext;
+    }
+
+    static LoweredValInfo extractedExistential(
+        ExtractedExistentialValInfo* extInfo);
+
+    ExtractedExistentialValInfo* getExtractedExistentialValInfo()
+    {
+        SLANG_ASSERT(flavor == Flavor::ExtractedExistential);
+        return (ExtractedExistentialValInfo*)ext;
     }
 };
 
@@ -272,6 +288,27 @@ struct SwizzledLValueInfo : ExtendedValueInfo
     UInt            elementIndices[4];
 };
 
+// Represents the results of extractng a value of
+// some (statically unknown) concrete type from
+// an existential, in an l-value context.
+//
+struct ExtractedExistentialValInfo : ExtendedValueInfo
+{
+    // The extracted value
+    IRInst* extractedVal;
+
+    // The original existential value
+    LoweredValInfo existentialVal;
+
+    // The type of `existentialVal`
+    IRType* existentialType;
+
+    // The IR witness table for the conformance of
+    // the type of `extractedVal` to `existentialType`
+    //
+    IRInst* witnessTable;
+};
+
 LoweredValInfo LoweredValInfo::boundMember(
     BoundMemberInfo*    boundMemberInfo)
 {
@@ -307,6 +344,16 @@ LoweredValInfo LoweredValInfo::swizzledLValue(
     info.ext = extInfo;
     return info;
 }
+
+LoweredValInfo LoweredValInfo::extractedExistential(
+    ExtractedExistentialValInfo* extInfo)
+{
+    LoweredValInfo info;
+    info.flavor = Flavor::ExtractedExistential;
+    info.ext = extInfo;
+    return info;
+}
+
 
 // An "environment" for mapping AST declarations to IR values.
 //
@@ -568,6 +615,12 @@ int32_t getIntrinsicOp(
     return int32_t(irOp);
 }
 
+struct TryClauseEnvironment
+{
+    TryClauseType clauseType = TryClauseType::None;
+    IRBlock* catchBlock = nullptr;
+};
+
 // Given a `LoweredValInfo` for something callable, along with a
 // bunch of arguments, emit an appropriate call to it.
 LoweredValInfo emitCallToVal(
@@ -575,7 +628,8 @@ LoweredValInfo emitCallToVal(
     IRType*         type,
     LoweredValInfo  funcVal,
     UInt            argCount,
-    IRInst* const* args)
+    IRInst* const*  args,
+    const TryClauseEnvironment& tryEnv)
 {
     auto builder = context->irBuilder;
     switch (funcVal.flavor)
@@ -583,8 +637,33 @@ LoweredValInfo emitCallToVal(
     case LoweredValInfo::Flavor::None:
         SLANG_UNEXPECTED("null function");
     default:
-        return LoweredValInfo::simple(
-            builder->emitCallInst(type, getSimpleVal(context, funcVal), argCount, args));
+        switch (tryEnv.clauseType)
+        {
+        case TryClauseType::None:
+            return LoweredValInfo::simple(
+                builder->emitCallInst(type, getSimpleVal(context, funcVal), argCount, args));
+
+        case TryClauseType::Standard:
+            {
+                auto callee = getSimpleVal(context, funcVal);
+                auto succBlock = builder->createBlock();
+                auto failBlock = builder->createBlock();
+                auto funcType = as<IRFuncType>(callee->getDataType());
+                auto throwAttr = funcType->findAttr<IRFuncThrowTypeAttr>();
+                assert(throwAttr);
+                auto voidType = builder->getVoidType();
+                builder->emitTryCallInst(voidType, succBlock, failBlock, callee, argCount, args);
+                builder->insertBlock(failBlock);
+                auto errParam = builder->emitParam(throwAttr->getErrorType());
+                builder->emitThrow(errParam);
+                builder->insertBlock(succBlock);
+                auto value = builder->emitParam(type);
+                return LoweredValInfo::simple(value);
+            }
+            break;
+        default:
+            SLANG_UNIMPLEMENTED_X("emitCallToVal(tryClauseType)");
+        }
     }
 }
 
@@ -611,7 +690,8 @@ LoweredValInfo emitCallToDeclRef(
     DeclRef<Decl>   funcDeclRef,
     IRType*         funcType,
     UInt            argCount,
-    IRInst* const* args)
+    IRInst* const*  args,
+    const TryClauseEnvironment& tryEnv)
 {
     SLANG_ASSERT(funcType);
 
@@ -656,7 +736,7 @@ LoweredValInfo emitCallToDeclRef(
     // Fallback case is to emit an actual call.
     //
     LoweredValInfo funcVal = emitDeclRef(context, funcDeclRef, funcType);
-    return emitCallToVal(context, type, funcVal, argCount, args);
+    return emitCallToVal(context, type, funcVal, argCount, args, tryEnv);
 }
 
 LoweredValInfo emitCallToDeclRef(
@@ -664,20 +744,18 @@ LoweredValInfo emitCallToDeclRef(
     IRType*                 type,
     DeclRef<Decl>           funcDeclRef,
     IRType*                 funcType,
-    List<IRInst*> const&    args)
+    List<IRInst*> const&    args,
+    const TryClauseEnvironment& tryEnv)
 {
-    return emitCallToDeclRef(context, type, funcDeclRef, funcType, args.getCount(), args.getBuffer());
+    return emitCallToDeclRef(
+        context,
+        type,
+        funcDeclRef,
+        funcType,
+        args.getCount(),
+        args.getBuffer(),
+        tryEnv);
 }
-
-    /// Represents the "direction" that a parameter is being passed (e.g., `in` or `out`
-enum ParameterDirection
-{
-    kParameterDirection_In,     ///< Copy in
-    kParameterDirection_Out,    ///< Copy out
-    kParameterDirection_InOut,  ///< Copy in, copy out
-    kParameterDirection_Ref,    ///< By-reference
-};
-
 
     /// Emit a call to the given `accessorDeclRef`.
     ///
@@ -935,6 +1013,13 @@ top:
                 swizzleInfo->elementIndices));
         }
 
+    case LoweredValInfo::Flavor::ExtractedExistential:
+        {
+            auto info = lowered.getExtractedExistentialValInfo();
+
+            return LoweredValInfo::simple(info->extractedVal);
+        }
+
     default:
         SLANG_UNEXPECTED("unhandled value flavor");
         UNREACHABLE_RETURN(LoweredValInfo());
@@ -1047,9 +1132,23 @@ static void addLinkageDecoration(
         builder->addPublicDecoration(inst);
         builder->addKeepAliveDecoration(inst);
     }
+    if (decl->findModifier<HLSLExportModifier>())
+    {
+        builder->addHLSLExportDecoration(inst);
+        builder->addKeepAliveDecoration(inst);
+    }
     if (decl->findModifier<ExternCppModifier>())
     {
         builder->addExternCppDecoration(inst, mangledName);
+    }
+    if (decl->findModifier<JVPDerivativeModifier>())
+    {
+        builder->addJVPDerivativeMarkerDecoration(inst);
+    }
+    if (as<InterfaceDecl>(decl->parentDecl) &&
+        decl->parentDecl->hasModifier<ComInterfaceAttribute>())
+    {
+        builder->addExternCppDecoration(inst, decl->getName()->text.getUnownedSlice());
     }
     if (auto dllImportModifier = decl->findModifier<DllImportAttribute>())
     {
@@ -1519,10 +1618,21 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         {
             paramTypes.add(lowerType(context, type->getParamType(pp)));
         }
-        return getBuilder()->getFuncType(
-            paramCount,
-            paramTypes.getBuffer(),
-            resultType);
+        if (type->getErrorType()->equals(context->astBuilder->getBottomType()))
+        {
+            return getBuilder()->getFuncType(
+                paramCount,
+                paramTypes.getBuffer(),
+                resultType);
+        }
+        else
+        {
+            auto errorType = lowerType(context, type->getErrorType());
+            auto irThrowFuncTypeAttribute =
+                getBuilder()->getAttr(kIROp_FuncThrowTypeAttr, 1, (IRInst**)&errorType);
+            return getBuilder()->getFuncType(
+                paramCount, paramTypes.getBuffer(), resultType, irThrowFuncTypeAttribute);
+        }
     }
 
     IRType* visitPtrType(PtrType* type)
@@ -1920,6 +2030,12 @@ void maybeSetRate(
             builder->getGroupSharedRate(),
             inst->getFullType()));
     }
+    else if (decl->hasModifier<ActualGlobalModifier>())
+    {
+        inst->setFullType(builder->getRateQualifiedType(
+            builder->getActualGlobalRate(),
+            inst->getFullType()));
+    }
 }
 
 static String getNameForNameHint(
@@ -2098,6 +2214,7 @@ void addInArg(
     case LoweredValInfo::Flavor::SwizzledLValue:
     case LoweredValInfo::Flavor::BoundStorage:
     case LoweredValInfo::Flavor::BoundMember:
+    case LoweredValInfo::Flavor::ExtractedExistential:
         args.add(getSimpleVal(context, argVal));
         break;
 
@@ -2484,6 +2601,7 @@ IRLoweringParameterInfo getParameterInfo(
     DeclRef<VarDeclBase> const& paramDecl)
 {
     IRLoweringParameterInfo info;
+
     info.type = getType(context->astBuilder, paramDecl);
     info.decl = paramDecl;
     info.direction = getParameterDirection(paramDecl);
@@ -2693,6 +2811,11 @@ void _lowerFuncDeclBaseTypeInfo(
             irParamType = maybeGetConstExprType(builder, irParamType, paramInfo.decl);
         }
 
+        if (paramInfo.decl && paramInfo.decl->hasModifier<HLSLGroupSharedModifier>())
+        {
+            irParamType = builder->getRateQualifiedType(builder->getGroupSharedRate(), irParamType);
+        }
+
         paramTypes.add(irParamType);
     }
 
@@ -2716,11 +2839,20 @@ void _lowerFuncDeclBaseTypeInfo(
         // being accessed, rather than a simple value.
         irResultType = builder->getPtrType(irResultType);
     }
-
-    outInfo.type = builder->getFuncType(
-        paramTypes.getCount(),
-        paramTypes.getBuffer(),
-        irResultType);
+  
+    if (!getErrorCodeType(context->astBuilder, declRef)->equals(context->astBuilder->getBottomType()))
+    {
+        auto errorType = lowerType(context, getErrorCodeType(context->astBuilder, declRef));
+        IRAttr* throwTypeAttr = nullptr;
+        throwTypeAttr = builder->getAttr(kIROp_FuncThrowTypeAttr, 1, (IRInst**)&errorType);
+        outInfo.type = builder->getFuncType(
+            paramTypes.getCount(), paramTypes.getBuffer(), irResultType, throwTypeAttr);
+    }
+    else
+    {
+        outInfo.type =
+            builder->getFuncType(paramTypes.getCount(), paramTypes.getBuffer(), irResultType);
+    }
 }
 
 static LoweredValInfo _emitCallToAccessor(
@@ -2756,7 +2888,8 @@ static LoweredValInfo _emitCallToAccessor(
         accessorDeclRef,
         info.type,
         allArgs.getCount(),
-        allArgs.getBuffer());
+        allArgs.getBuffer(),
+        TryClauseEnvironment());
 
     applyOutArgumentFixups(context, fixups);
 
@@ -2768,6 +2901,8 @@ static LoweredValInfo _emitCallToAccessor(
 template<typename Derived>
 struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
 {
+    static bool isLValueContext() { return Derived::_isLValueContext(); }
+
     IRGenContext* context;
 
     IRBuilder* getBuilder() { return context->irBuilder; }
@@ -2781,6 +2916,19 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
         return this->dispatch(expr);
     }
 
+    LoweredValInfo lowerSubExpr(Expr* expr, IRGenContext* subContext)
+    {
+        IRBuilderSourceLocRAII sourceLocInfo(getBuilder(), expr->loc);
+        Derived d;
+        d.context = subContext;
+        return d.dispatch(expr);
+    }
+
+    LoweredValInfo visitIncompleteExpr(IncompleteExpr*)
+    {
+        SLANG_UNEXPECTED("a valid ast should not contain an IncompleteExpr.");
+        UNREACHABLE_RETURN(LoweredValInfo());
+    }
 
     LoweredValInfo visitVarExpr(VarExpr* expr)
     {
@@ -2789,6 +2937,21 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
             expr->declRef,
             lowerType(context, expr->type));
         return info;
+    }
+
+    // Emit IR to denote the forward-mode derivative
+    // of the inner func-expr. This will be resolved 
+    // to a concrete function during the derivative 
+    // pass.
+    LoweredValInfo visitJVPDifferentiateExpr(JVPDifferentiateExpr* expr)
+    {
+        auto baseVal = lowerSubExpr(expr->baseFunction);
+        SLANG_ASSERT(baseVal.flavor == LoweredValInfo::Flavor::Simple);
+
+        return LoweredValInfo::simple(
+            getBuilder()->emitJVPDifferentiateInst(
+                lowerType(context, expr->type),
+                baseVal.val));
     }
 
     LoweredValInfo visitOverloadedExpr(OverloadedExpr* /*expr*/)
@@ -3247,74 +3410,112 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
         // TODO: also need to handle this-type substitution here?
     }
 
+        /// Create IR instructions for an argument at a call site, based on
+        /// AST-level expressions plus function signature information.
+        ///
+        /// The `funcType` parameter is always required, and specifies the types
+        /// of all the parameters. The `funcDeclRef` parameter is only required
+        /// if there are parameter positions for which the matching argument is
+        /// absent.
+        ///
+    void addDirectCallArgs(
+        InvokeExpr*             expr,
+        Index                   argIndex,
+        IRType*                 paramType,
+        ParameterDirection      paramDirection,
+        DeclRef<ParamDecl>      paramDeclRef,
+        List<IRInst*>*          ioArgs,
+        List<OutArgumentFixup>* ioFixups)
+    {
+        Count argCount = expr->arguments.getCount();
+        if (argIndex < argCount)
+        {
+            auto argExpr = expr->arguments[argIndex];
+            addCallArgsForParam(context, paramType, paramDirection, argExpr, ioArgs, ioFixups);
+        }
+        else
+        {
+            // We have run out of arguments supplied at the call site,
+            // but there are still parameters remaining. This must mean
+            // that these parameters have default argument expressions
+            // associated with them.
+            //
+            // Currently we simply extract the initial-value expression
+            // from the parameter declaration and then lower it in
+            // the context of the caller.
+            //
+            // Note that the expression could involve subsitutions because
+            // in the general case it could depend on the generic parameters
+            // used the specialize the callee. For now we do not handle that
+            // case, and simply ignore generic arguments.
+            //
+            SubstExpr<Expr> argExpr = getInitExpr(getASTBuilder(), paramDeclRef);
+            SLANG_ASSERT(argExpr);
+
+            IRGenEnv subEnvStorage;
+            IRGenEnv* subEnv = &subEnvStorage;
+            subEnv->outer = context->env;
+
+            IRGenContext subContextStorage = *context;
+            IRGenContext* subContext = &subContextStorage;
+            subContext->env = subEnv;
+
+            _lowerSubstitutionEnv(subContext, argExpr.getSubsts());
+
+            addCallArgsForParam(subContext, paramType, paramDirection, argExpr.getExpr(), ioArgs, ioFixups);
+
+            // TODO: The approach we are taking here to default arguments
+            // is simplistic, and has consequences for the front-end as
+            // well as binary serialization of modules.
+            //
+            // We could consider some more refined approaches where, e.g.,
+            // functions with default arguments generate multiple IR-level
+            // functions, that compute and provide the default values.
+            //
+            // Alternatively, each parameter with defaults could be generated
+            // into its own callable function that provides the default value,
+            // so that calling modules can call into a pre-generated function.
+            //
+            // Each of these options involves trade-offs, and we need to
+            // make a conscious decision at some point.
+
+            // Assert that such an expression must have been present.
+        }
+    }
+
+    void addDirectCallArgs(
+        InvokeExpr*             expr,
+        FuncType*               funcType,
+        List<IRInst*>*          ioArgs,
+        List<OutArgumentFixup>* ioFixups)
+    {
+        Count argCount = expr->arguments.getCount();
+        SLANG_ASSERT(argCount == static_cast<Count>(funcType->getParamCount()));
+
+        for(Index i = 0; i < argCount; ++i)
+        {
+            IRType* paramType = lowerType(context, funcType->getParamType(i));
+            ParameterDirection paramDirection = funcType->getParamDirection(i);
+            addDirectCallArgs(expr, i, paramType, paramDirection, DeclRef<ParamDecl>(), ioArgs, ioFixups);
+        }
+    }
+
+
     void addDirectCallArgs(
         InvokeExpr*             expr,
         DeclRef<CallableDecl>   funcDeclRef,
-        List<IRInst*>*         ioArgs,
+        List<IRInst*>*          ioArgs,
         List<OutArgumentFixup>* ioFixups)
     {
-        UInt argCount = expr->arguments.getCount();
-        UInt argCounter = 0;
+        Count argCounter = 0;
         for (auto paramDeclRef : getMembersOfType<ParamDecl>(funcDeclRef))
         {
             auto paramDecl = paramDeclRef.getDecl();
             IRType* paramType = lowerType(context, getType(getASTBuilder(), paramDeclRef));
             auto paramDirection = getParameterDirection(paramDecl);
 
-            UInt argIndex = argCounter++;
-            if(argIndex < argCount)
-            {
-                auto argExpr = expr->arguments[argIndex];
-                addCallArgsForParam(context, paramType, paramDirection, argExpr, ioArgs, ioFixups);
-            }
-            else
-            {
-                // We have run out of arguments supplied at the call site,
-                // but there are still parameters remaining. This must mean
-                // that these parameters have default argument expressions
-                // associated with them.
-                //
-                // Currently we simply extract the initial-value expression
-                // from the parameter declaration and then lower it in
-                // the context of the caller.
-                //
-                // Note that the expression could involve subsitutions because
-                // in the general case it could depend on the generic parameters
-                // used the specialize the callee. For now we do not handle that
-                // case, and simply ignore generic arguments.
-                //
-                SubstExpr<Expr> argExpr = getInitExpr(getASTBuilder(), paramDeclRef);
-                SLANG_ASSERT(argExpr);
-
-                IRGenEnv subEnvStorage;
-                IRGenEnv* subEnv = &subEnvStorage;
-                subEnv->outer = context->env;
-
-                IRGenContext subContextStorage = *context;
-                IRGenContext* subContext = &subContextStorage;
-                subContext->env = subEnv;
-
-                _lowerSubstitutionEnv(subContext, argExpr.getSubsts());
-
-                addCallArgsForParam(subContext, paramType, paramDirection, argExpr.getExpr(), ioArgs, ioFixups);
-
-                // TODO: The approach we are taking here to default arguments
-                // is simplistic, and has consequences for the front-end as
-                // well as binary serialization of modules.
-                //
-                // We could consider some more refined approaches where, e.g.,
-                // functions with default arguments generate multiple IR-level
-                // functions, that compute and provide the default values.
-                //
-                // Alternatively, each parameter with defaults could be generated
-                // into its own callable function that provides the default value,
-                // so that calling modules can call into a pre-generated function.
-                //
-                // Each of these options involves trade-offs, and we need to
-                // make a conscious decision at some point.
-
-                // Assert that such an expression must have been present.
-            }
+            Index argIndex = argCounter++;
+            addDirectCallArgs(expr, argIndex, paramType, paramDirection, paramDeclRef, ioArgs, ioFixups);
         }
     }
 
@@ -3447,6 +3648,11 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
 
     LoweredValInfo visitInvokeExpr(InvokeExpr* expr)
     {
+        return visitInvokeExprImpl(expr, TryClauseEnvironment());
+    }
+
+    LoweredValInfo visitInvokeExprImpl(InvokeExpr* expr, const TryClauseEnvironment& tryEnv)
+    {
         auto type = lowerType(context, expr->type);
 
         // We are going to look at the syntactic form of
@@ -3475,7 +3681,7 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
 
         auto funcExpr = expr->functionExpr;
         ResolvedCallInfo resolvedInfo;
-        if( tryResolveDeclRefForCall(funcExpr, &resolvedInfo) )
+        if (tryResolveDeclRefForCall(funcExpr, &resolvedInfo))
         {
             // In this case we know exactly what declaration we
             // are going to call, and so we can resolve things
@@ -3529,7 +3735,7 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
 
             // First comes the `this` argument if we are calling
             // a member function:
-            if( baseExpr )
+            if (baseExpr)
             {
                 // The base expression might be an "upcast" to a base interface, in
                 // which case we don't want to emit the result of the cast, but instead
@@ -3559,10 +3765,22 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
                 type,
                 funcDeclRef,
                 funcType,
-                irArgs);
+                irArgs,
+                tryEnv);
             applyOutArgumentFixups(context, argFixups);
             return result;
         }
+        else if(auto funcType = as<FuncType>(expr->functionExpr->type))
+        {
+            auto funcVal = lowerRValueExpr(context, expr->functionExpr);
+            addDirectCallArgs(expr, funcType, &irArgs, &argFixups);
+
+            auto result = emitCallToVal(context, type, funcVal, irArgs.getCount(), irArgs.getBuffer(), tryEnv);
+
+            applyOutArgumentFixups(context, argFixups);
+            return result;
+        }
+        
 
         // TODO: In this case we should be emitting code for the callee as
         // an ordinary expression, then emitting the arguments according
@@ -3579,6 +3797,16 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
         //
         SLANG_UNEXPECTED("could not resolve target declaration for call");
         UNREACHABLE_RETURN(LoweredValInfo());
+    }
+
+        /// Emit code for a `try` invoke.
+    LoweredValInfo visitTryExpr(TryExpr* expr)
+    {
+        auto invokeExpr = as<InvokeExpr>(expr->base);
+        assert(invokeExpr);
+        TryClauseEnvironment tryEnv;
+        tryEnv.clauseType = expr->tryClauseType;
+        return visitInvokeExprImpl(invokeExpr, tryEnv);
     }
 
         /// Emit code to cast `value` to a concrete `superType` (e.g., a `struct`).
@@ -3786,8 +4014,20 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
 
     LoweredValInfo visitLetExpr(LetExpr* expr)
     {
-        // TODO: deal with the case where we might want to capture
-        // a reference to the bound value...
+        // Note: The semantics here are annoyingly subtle.
+        //
+        // If `expr->decl->initExpr` is an l-value, then we will set things up
+        // so that `expr->decl` is bound as an *alias* for that l-value.
+        //
+        // Otherwise, `expr->decl` will simply be bound to the r-value.
+        //
+        // The first case is necessary to make `maybeMoveTemp` operations that
+        // produce l-value results work correctly, but seems slippery.
+        //
+        // TODO: We should probably have two AST node types to cover the two
+        // different use cases of `LetExpr`: the definitely-immutable case that
+        // actually behaves like a `let`, and this other mutable-alias case that
+        // feels kind of messy and gross.
 
         auto initVal = lowerLValueExpr(context, expr->decl->initExpr);
         setGlobalValue(context, expr->decl, initVal);
@@ -3797,17 +4037,66 @@ struct ExprLoweringVisitorBase : ExprVisitor<Derived, LoweredValInfo>
 
     LoweredValInfo visitExtractExistentialValueExpr(ExtractExistentialValueExpr* expr)
     {
+        // We are being asked to extract the value from an existential, which
+        // is itself a single IR op. However, we also need to handle the case
+        // where `expr` might be used as an l-value, in which case we need
+        // additional information to allow any mutations through the extracted
+        // value to be written back.
+
         auto existentialType = lowerType(context, getType(getASTBuilder(), expr->declRef));
-        auto existentialVal = getSimpleVal(context, emitDeclRef(context, expr->declRef, existentialType));
+        auto existentialVal = emitDeclRef(context, expr->declRef, existentialType);
+
+        // Note that we make a *copy* of the existential value that is definitely
+        // a simple r-value. This ensures that all the `extractExistential*()` operations
+        // below work on the same consistent IR value.
+        //
+        auto existentialValCopy = getSimpleVal(context, existentialVal);
 
         auto openedType = lowerType(context, expr->type);
 
-        return LoweredValInfo::simple(getBuilder()->emitExtractExistentialValue(openedType, existentialVal));
+        auto extractedVal = getBuilder()->emitExtractExistentialValue(
+            openedType, existentialValCopy);
+
+        if(!isLValueContext())
+        {
+            // If we are in an r-value context, we can directly use the `extractExistentialValue`
+            // instruction as the result, and life is simple.
+            //
+            return LoweredValInfo::simple(extractedVal);
+        }
+
+        // In an l-value context, we need to track the information necessary so that
+        // if a new/modified value of `openedType` was produced, we could write it
+        // back into the original `existentialVal`'s location.
+        //
+        // The write-back is actually pretty simple: it is just a `makeExisential` op.
+        // In order to be able to emit that op later, we need to track the operands
+        // that it would use. The first operand would be the new concrete value (which
+        // would implicitly encode the concrete type via its IR type) while the second
+        // is the witness table for the conformance to the existential.
+        //
+        // Note: We are assuming/requiring here that any value "written back" must have
+        // the exact same concrete type as `extractedVal`, so taht it can use the same
+        // IR witness table. The front-end should be enforcing that constraint, and we
+        // have no way to check or enforce it at this point.
+
+        auto witnessTable = getBuilder()->emitExtractExistentialWitnessTable(existentialValCopy);
+
+        RefPtr<ExtractedExistentialValInfo> info = new ExtractedExistentialValInfo();
+        info->extractedVal = extractedVal;
+        info->existentialVal = existentialVal;
+        info->existentialType = existentialType;
+        info->witnessTable = witnessTable;
+
+        context->shared->extValues.add(info);
+        return LoweredValInfo::extractedExistential(info);
     }
 };
 
 struct LValueExprLoweringVisitor : ExprLoweringVisitorBase<LValueExprLoweringVisitor>
 {
+    static bool _isLValueContext() { return true; }
+
     // When visiting a swizzle expression in an l-value context,
     // we need to construct a "swizzled l-value."
     LoweredValInfo visitMatrixSwizzleExpr(MatrixSwizzleExpr*)
@@ -3885,6 +4174,8 @@ struct LValueExprLoweringVisitor : ExprLoweringVisitorBase<LValueExprLoweringVis
 
 struct RValueExprLoweringVisitor : ExprLoweringVisitorBase<RValueExprLoweringVisitor>
 {
+    static bool _isLValueContext() { return false; }
+
     // A matrix swizzle in an r-value context can save time by just
     // emitting the matrix swizzle instructions directly.
     LoweredValInfo visitMatrixSwizzleExpr(MatrixSwizzleExpr* expr)
@@ -5273,6 +5564,32 @@ top:
         }
         break;
 
+    case LoweredValInfo::Flavor::ExtractedExistential:
+        {
+            // The `left` value is the result of opening an existential.
+            //
+            auto leftInfo = left.getExtractedExistentialValInfo();
+            auto existentialVal = leftInfo->existentialVal;
+
+            // The actual desitnation we need to store into is the
+            // existential value itself.
+            //
+            left = existentialVal;
+
+            // The `right` value must be of the same concrete type as
+            // the opened value, but the new destination is of the
+            // original existential type, so we need to wrap it up
+            // appropriately.
+            //
+            right = LoweredValInfo::simple(builder->emitMakeExistential(
+                leftInfo->existentialType,
+                getSimpleVal(context, right),
+                leftInfo->witnessTable));
+
+            goto top;
+        }
+        break;
+
     default:
         SLANG_UNIMPLEMENTED_X("assignment");
         break;
@@ -5408,6 +5725,10 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
     bool isPublicType(Type* type)
     {
+        // TODO(JS):
+        // Not clear how should handle HLSLExportModifier here. 
+        // In the HLSL spec 'export' is only applicable to functions. So for now we ignore.
+
         if (auto declRefType = as<DeclRefType>(type))
         {
             if (declRefType->declRef.getDecl()->findModifier<PublicModifier>())
@@ -5547,7 +5868,7 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
 
         if(auto superDeclRefType = as<DeclRefType>(superType))
         {
-            if( auto superStructDeclRef = superDeclRefType->declRef.as<StructDecl>() )
+            if( superDeclRefType->declRef.as<StructDecl>() || superDeclRefType->declRef.as<ClassDecl>() )
             {
                 // TODO: the witness that a type inherits from a `struct`
                 // type should probably be a key that will be used for
@@ -5595,6 +5916,11 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         irWitnessTable->setOperand(0, irSubType);
 
         addLinkageDecoration(context, irWitnessTable, inheritanceDecl, mangledName.getUnownedSlice());
+
+        // TODO(JS):
+        // Not clear what to do here around HLSLExportModifier. 
+        // In HLSL it only (currently) applies to functions, so perhaps do nothing is reasonable.
+        
         if (parentDecl->findModifier<PublicModifier>())
         {
             subBuilder->addPublicDecoration(irWitnessTable);
@@ -5861,6 +6187,9 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         IRType* varType = lowerType(context, decl->getType());
 
         auto builder = getBuilder();
+
+        // TODO(JS): Do we create something derived from IRGlobalVar? Or do we use 
+        // a decoration to identify an *actual* global?
 
         IRGlobalValueWithCode* irGlobal = builder->createGlobalVar(varType);
         LoweredValInfo globalVal = LoweredValInfo::ptr(irGlobal);
@@ -6265,6 +6594,10 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         {
             subBuilder->addAnyValueSizeDecoration(irInterface, anyValueSizeAttr->size);
         }
+        if (auto comInterfaceAttr = decl->findModifier<ComInterfaceAttribute>())
+        {
+            subBuilder->addComInterfaceDecoration(irInterface);
+        }
         if (auto builtinAttr = decl->findModifier<BuiltinAttribute>())
         {
             subBuilder->addBuiltinDecoration(irInterface);
@@ -6340,7 +6673,11 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             SLANG_UNREACHABLE("associatedtype should have been handled by visitAssocTypeDecl.");
         }
 
-        bool isPublicType = decl->findModifier<PublicModifier>() != nullptr;
+        // TODO(JS): 
+        // Not clear what to do around HLSLExportModifier. 
+        // The HLSL spec says it only applies to functions, so we ignore for now.
+
+        const bool isPublicType = decl->findModifier<PublicModifier>() != nullptr;
 
         // Given a declaration of a type, we need to make sure
         // to output "witness tables" for any interfaces this
@@ -6360,16 +6697,30 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         // Emit any generics that should wrap the actual type.
         auto outerGeneric = emitOuterGenerics(subContext, decl, decl);
 
-        IRStructType* irStruct = subBuilder->createStructType();
-        addNameHint(context, irStruct, decl);
-        addLinkageDecoration(context, irStruct, decl);
+        IRType* irAggType = nullptr;
+        if (as<StructDecl>(decl))
+        {
+            irAggType = subBuilder->createStructType();
+        }
+        else if (as<ClassDecl>(decl))
+        {
+            irAggType = subBuilder->createClassType();
+        }
+        else
+        {
+            getSink()->diagnose(decl->loc, Diagnostics::unimplemented, "lower unknown AggType to IR");
+            return LoweredValInfo::simple(subBuilder->getVoidType());
+        }
+
+        addNameHint(context, irAggType, decl);
+        addLinkageDecoration(context, irAggType, decl);
 
         if( auto payloadAttribute = decl->findModifier<PayloadAttribute>() )
         {
-            subBuilder->addDecoration(irStruct, kIROp_PayloadDecoration);
+            subBuilder->addDecoration(irAggType, kIROp_PayloadDecoration);
         }
 
-        subBuilder->setInsertInto(irStruct);
+        subBuilder->setInsertInto(irAggType);
 
         // A `struct` that inherits from another `struct` must start
         // with a member for the direct base type.
@@ -6381,12 +6732,13 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             auto superType = inheritanceDecl->base;
             if(auto superDeclRefType = as<DeclRefType>(superType))
             {
-                if(auto superStructDeclRef = superDeclRefType->declRef.as<StructDecl>())
+                if (superDeclRefType->declRef.as<StructDecl>() ||
+                    superDeclRefType->declRef.as<ClassDecl>())
                 {
                     auto superKey = (IRStructKey*) getSimpleVal(context, ensureDecl(context, inheritanceDecl));
                     auto irSuperType = lowerType(context, superType.type);
                     subBuilder->createStructField(
-                        irStruct,
+                        irAggType,
                         superKey,
                         irSuperType);
                 }
@@ -6421,7 +6773,7 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             // Then, the parent `struct` instruction itself will have
             // a "field" instruction.
             subBuilder->createStructField(
-                irStruct,
+                irAggType,
                 fieldKey,
                 fieldType);
         }
@@ -6433,10 +6785,10 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         // Instead we will force emission of all children of aggregate
         // type declarations later, from the top-level emit logic.
 
-        irStruct->moveToEnd();
-        addTargetIntrinsicDecorations(irStruct, decl);
+        irAggType->moveToEnd();
+        addTargetIntrinsicDecorations(irAggType, decl);
 
-        return LoweredValInfo::simple(finishOuterGenerics(subBuilder, irStruct, outerGeneric));
+        return LoweredValInfo::simple(finishOuterGenerics(subBuilder, irAggType, outerGeneric));
     }
 
     void lowerRayPayloadAccessModifier(IRInst* inst, RayPayloadAccessSemantic* semantic, IROp op)
@@ -7106,6 +7458,19 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
         return finishOuterGenerics(funcTypeBuilder, irFuncType, outerGenerics);
     }
 
+    bool isClassType(IRType* type)
+    {
+        if (auto specialize = as<IRSpecialize>(type))
+        {
+            return findSpecializeReturnVal(specialize)->getOp() == kIROp_ClassType;
+        }
+        else if (auto genericInst = as<IRGeneric>(type))
+        {
+            return findGenericReturnVal(genericInst)->getOp() == kIROp_ClassType;
+        }
+        return type->getOp() == kIROp_ClassType;
+    }
+
     LoweredValInfo lowerFuncDecl(FunctionDeclBase* decl)
     {
         // We are going to use a nested builder, because we will
@@ -7317,6 +7682,13 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             {
                 auto thisVar = subContext->irBuilder->emitVar(irResultType);
                 subContext->thisVal = LoweredValInfo::ptr(thisVar);
+
+                // For class-typed objects, we need to allocate it from heap.
+                if (isClassType(irResultType))
+                {
+                    auto allocatedObj = subContext->irBuilder->emitAllocObj(irResultType);
+                    subContext->irBuilder->emitStore(thisVar, allocatedObj);
+                }
             }
 
             // We lower whatever statement was stored on the declaration
@@ -7424,15 +7796,6 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             getBuilder()->addSimpleDecoration<IRNoInlineDecoration>(irFunc);
         }
 
-#if 0
-        // Not needed as added as part of adding linkage decoration.
-        // Ie in call to addLinkageDecoration
-        if (decl->findModifier<PublicModifier>())
-        {
-            getBuilder()->addSimpleDecoration<IRPublicDecoration>(irFunc);
-        }
-#endif
-
         if (auto attr = decl->findModifier<InstanceAttribute>())
         {
             IRIntLit* intLit = _getIntLitFromAttribute(getBuilder(), attr);
@@ -7493,9 +7856,23 @@ struct DeclLoweringVisitor : DeclVisitor<DeclLoweringVisitor, LoweredValInfo>
             getBuilder()->addDecoration(irFunc, kIROp_OutputControlPointsDecoration, intLit);
         }
 
+        if (auto attr = decl->findModifier<SPIRVInstructionOpAttribute>())
+        {
+            IRIntLit* intLit = _getIntLitFromAttribute(getBuilder(), attr);
+            getBuilder()->addDecoration(irFunc, kIROp_SPIRVOpDecoration, intLit);
+        }
+
         if(decl->findModifier<UnsafeForceInlineEarlyAttribute>())
         {
             getBuilder()->addDecoration(irFunc, kIROp_UnsafeForceInlineEarlyDecoration);
+        }
+
+        if (auto attr = decl->findModifier<CustomJVPAttribute>())
+        {
+            auto loweredVal = lowerLValueExpr(this->context, attr->funcDeclRef);
+            SLANG_ASSERT(loweredVal.flavor == LoweredValInfo::Flavor::Simple);
+            IRFunc* jvpFunc = as<IRFunc>(loweredVal.val);
+            getBuilder()->addDecoration(irFunc, kIROp_JVPDerivativeReferenceDecoration, jvpFunc);
         }
 
         // For convenience, ensure that any additional global
@@ -8139,6 +8516,16 @@ RefPtr<IRModule> generateIRForTranslationUnit(
 #endif
 
     validateIRModuleIfEnabled(compileRequest, module);
+    
+    // Process higher-order-function calls before any optimization passes
+    // to allow the optimizations to affect the generated funcitons.
+    // 1. Process JVP derivative functions.
+    processJVPDerivativeMarkers(module, compileRequest->getSink());
+    // 2. Process VJP derivative functions.
+    // processVJPDerivativeMarkers(module); // Disabled currently. No impl yet.
+    // 3. Replace JVP & VJP calls.
+    processDerivativeCalls(module);
+
 
     // We will perform certain "mandatory" optimization passes now.
     // These passes serve two purposes:
@@ -8158,7 +8545,13 @@ RefPtr<IRModule> generateIRForTranslationUnit(
 
     //      dumpIR(module);
 
-    // First, inline calls to any functions that have been
+    // First, lower error handling logic into normal control flow.
+    // This includes lowering throwing functions into functions that
+    // returns a `Result<T,E>` value, translating `tryCall` into
+    // normal `call` + `ifElse`, etc.
+    lowerErrorHandling(module, compileRequest->getSink());
+
+    // Next, inline calls to any functions that have been
     // marked for mandatory "early" inlining.
     //
     performMandatoryEarlyInlining(module);

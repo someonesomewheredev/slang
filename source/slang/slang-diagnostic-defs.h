@@ -277,6 +277,9 @@ DIAGNOSTIC(30043, Error, getStringHashRequiresStringLiteral, "getStringHash para
 DIAGNOSTIC(30060, Error, expectedAType, "expected a type, got a '$0'")
 DIAGNOSTIC(30061, Error, expectedANamespace, "expected a namespace, got a '$0'")
 
+DIAGNOSTIC(30065, Error, newCanOnlyBeUsedToInitializeAClass, "`new` can only be used to initialize a class")
+DIAGNOSTIC(30066, Error, classCanOnlyBeInitializedWithNew, "a class can only be initialized by a `new` clause")
+
 DIAGNOSTIC(30100, Error, staticRefToNonStaticMember, "type '$0' cannot be used to refer to non-static member '$1'")
 
 DIAGNOSTIC(30200, Error, redeclaration, "declaration of '$0' conflicts with existing declaration")
@@ -289,6 +292,13 @@ DIAGNOSTIC(33071, Error, expectedAStringLiteral, "expected a string literal")
 
 DIAGNOSTIC(   -1, Note, noteExplicitConversionPossible, "explicit conversion from '$0' to '$1' is possible")
 DIAGNOSTIC(30080, Error, ambiguousConversion, "more than one implicit conversion exists from '$0' to '$1'")
+
+DIAGNOSTIC(30090, Error, tryClauseMustApplyToInvokeExpr, "expression in a 'try' clause must be a call to a function or operator overload.")
+DIAGNOSTIC(30091, Error, tryInvokeCalleeShouldThrow, "'$0' called from a 'try' clause does not throw an error, make sure the callee is marked as 'throws'")
+DIAGNOSTIC(30092, Error, calleeOfTryCallMustBeFunc, "callee in a 'try' clause must be a function")
+DIAGNOSTIC(30093, Error, uncaughtTryCallInNonThrowFunc, "the current function or environment is not declared to throw any errors, but the 'try' clause is not caught")
+DIAGNOSTIC(30094, Error, mustUseTryClauseToCallAThrowFunc, "the callee may throw an error, and therefore must be called within a 'try' clause")
+DIAGNOSTIC(30095, Error, errorTypeOfCalleeIncompatibleWithCaller, "the error type `$1` of callee `$0` is not compatible with the caller's error type `$2`.")
 
 // Attributes
 DIAGNOSTIC(31000, Error, unknownAttributeName, "unknown attribute '$0'")
@@ -310,6 +320,9 @@ DIAGNOSTIC(31102, Error, nonPositiveNumThreads, "expected a positive integer in 
 DIAGNOSTIC(31120, Error, invalidAttributeTarget, "invalid syntax target for user defined attribute")
 
 DIAGNOSTIC(31121, Error, anyValueSizeExceedsLimit, "'anyValueSize' cannot exceed $0")
+
+DIAGNOSTIC(31122, Error, associatedTypeNotAllowInComInterface, "associatedtype not allowed in a [COM] interface")
+
 // Enums
 
 DIAGNOSTIC(32000, Error, invalidEnumTagType,        "invalid tag type for 'enum': '$0'")
@@ -322,7 +335,7 @@ DIAGNOSTIC(30300, Error, assocTypeInInterfaceOnly, "'associatedtype' can only be
 DIAGNOSTIC(30301, Error, globalGenParamInGlobalScopeOnly, "'type_param' can only be defined global scope.")
 // TODO: need to assign numbers to all these extra diagnostics...
 DIAGNOSTIC(39999, Fatal, cyclicReference, "cyclic reference '$0'.")
-DIAGNOSTIC(39999, Fatal, localVariableUsedBeforeDeclared, "local variable '$0' is being used before its declaration.")
+DIAGNOSTIC(39999, Error, localVariableUsedBeforeDeclared, "local variable '$0' is being used before its declaration.")
 DIAGNOSTIC(39999, Error, variableUsedInItsOwnDefinition, "the initial-value expression for variable '$0' depends on the value of the variable itself")
 
 // 304xx: generics
@@ -347,13 +360,18 @@ DIAGNOSTIC(30700, Error, outputParameterCannotHaveDefaultValue, "an 'out' or 'in
 DIAGNOSTIC(30810, Error, baseOfInterfaceMustBeInterface, "interface '$0' cannot inherit from non-interface type '$1'")
 DIAGNOSTIC(30811, Error, baseOfStructMustBeStructOrInterface, "struct '$0' cannot inherit from type '$1' that is neither a struct nor an interface")
 DIAGNOSTIC(30812, Error, baseOfEnumMustBeIntegerOrInterface, "enum '$0' cannot inherit from type '$1' that is neither an interface not a builtin integer type")
-DIAGNOSTIC(30810, Error, baseOfExtensionMustBeInterface, "extension cannot inherit from non-interface type '$1'")
+DIAGNOSTIC(30813, Error, baseOfExtensionMustBeInterface, "extension cannot inherit from non-interface type '$1'")
+DIAGNOSTIC(30814, Error, baseOfClassMustBeClassOrInterface, "class '$0' cannot inherit from type '$1' that is neither a class nor an interface")
 
 DIAGNOSTIC(30820, Error, baseStructMustBeListedFirst, "a struct type may only inherit from one other struct type, and that type must appear first in the list of bases")
 DIAGNOSTIC(30821, Error, tagTypeMustBeListedFirst, "an unum type may only have a single tag type, and that type must be listed first in the list of bases")
+DIAGNOSTIC(30822, Error, baseClassMustBeListedFirst, "a class type may only inherit from one other class type, and that type must appear first in the list of bases")
 
-DIAGNOSTIC(30820, Error, cannotInheritFromExplicitlySealedDeclarationInAnotherModule, "cannot inherit from type '$0' marked 'sealed' in module '$1'")
-DIAGNOSTIC(30821, Error, cannotInheritFromImplicitlySealedDeclarationInAnotherModule, "cannot inherit from type '$0' in module '$1' because it is implicitly 'sealed'; mark the base type 'open' to allow inheritance across modules")
+DIAGNOSTIC(30830, Error, cannotInheritFromExplicitlySealedDeclarationInAnotherModule, "cannot inherit from type '$0' marked 'sealed' in module '$1'")
+DIAGNOSTIC(30831, Error, cannotInheritFromImplicitlySealedDeclarationInAnotherModule, "cannot inherit from type '$0' in module '$1' because it is implicitly 'sealed'; mark the base type 'open' to allow inheritance across modules")
+DIAGNOSTIC(30832, Error, invalidTypeForInheritance, "type '$0' cannot be used for inheritance")
+
+DIAGNOSTIC(30850, Error, invalidExtensionOnType, "type '$0' cannot be extended. `extension` can only be used to extend a nominal type.")
 
 // 309xx: subscripts
 

@@ -150,15 +150,22 @@ newoption {
      value       = "bool",
      default     = "true",
      allowed     = { { "true", "True"}, { "false", "False" } }
-  }
+ }
 
-  newoption {
+ newoption {
     trigger     = "enable-experimental-projects",
     description = "(Optional) If true include experimental projects in build.",
     value       = "bool",
     default     = "false",
     allowed     = { { "true", "True"}, { "false", "False" } }
-  }
+ }
+
+ newoption {
+    trigger     = "disable-stdlib-source",
+    description = "(Optional) If true stdlib source will not be included in binary.",
+    value       = "bool",
+    allowed     = { { "true", "True"}, { "false", "False" } }
+ }
 
  buildLocation = _OPTIONS["build-location"]
  executeBinary = (_OPTIONS["execute-binary"] == "true")
@@ -171,6 +178,15 @@ newoption {
  enableEmbedStdLib = (_OPTIONS["enable-embed-stdlib"] == "true")
  enableXlib = (_OPTIONS["enable-xlib"] == "true")
  enableExperimental = (_OPTIONS["enable-experimental-projects"] == "true")
+ 
+ -- If stdlib embedding is enabled, disable stdlib source embedding by default
+ disableStdlibSource = enableEmbedStdLib
+ 
+ -- If embedding is enabled, and the setting `disable-stdlib-source` setting is set, use it's value
+ if enableEmbedStdLib and _OPTIONS["disable-stdlib-source"] ~= nil then
+    disableStdlibSource = (_OPTIONS["disable-stdlib-source"] == "true")   
+ end
+ 
  -- Determine the target info
 
  targetInfo = slangUtil.getTargetInfo()
@@ -230,10 +246,30 @@ newoption {
          buildoptions { "-D_GNU_SOURCE" }
  end
  
+ function getPlatforms(targetInfo)
+    if _ACTION == "xcode4" then
+        local arch = targetInfo.arch
+        local valueMap = 
+        {
+            x86_64 = "x64",
+            arm = "aarch64",
+        }
+        
+        local value = valueMap[arch:lower()]
+        if value == nil then
+            return { arch }
+        else
+            return { value }
+        end       
+    else
+        return { "x86", "x64", "aarch64" }
+    end
+ end
+ 
  workspace "slang"
      -- We will support debug/release configuration and x86/x64 builds.
      configurations { "Debug", "Release" }
-     platforms { "x86", "x64", "aarch64" }
+     platforms(getPlatforms(targetInfo))
  
      if buildLocation then
          location(buildLocation)
@@ -265,6 +301,9 @@ newoption {
  
      -- Our `x64` platform should (obviously) target the x64
      -- architecture and similarly for x86.
+     --
+     -- https://premake.github.io/docs/architecture/
+     -- 
      filter { "platforms:x64" }
          architecture "x64"
      filter { "platforms:x86" }
@@ -272,15 +311,14 @@ newoption {
      filter { "platforms:aarch64"}
          architecture "ARM"
  
- 
      filter { "toolset:clang or gcc*" }
          -- Makes all symbols hidden by default unless explicitly 'exported'
          buildoptions { "-fvisibility=hidden" } 
          -- Warnings
-         buildoptions { "-Wno-unused-parameter", "-Wno-type-limits", "-Wno-sign-compare", "-Wno-unused-variable", "-Wno-reorder", "-Wno-switch", "-Wno-return-type", "-Wno-unused-local-typedefs", "-Wno-parentheses",   "-Wno-ignored-optimization-argument", "-Wno-unknown-warning-option", "-Wno-class-memaccess"}
+         buildoptions { "-Wno-unused-but-set-variable", "-Wno-unused-parameter", "-Wno-type-limits", "-Wno-sign-compare", "-Wno-unused-variable", "-Wno-reorder", "-Wno-switch", "-Wno-return-type", "-Wno-unused-local-typedefs", "-Wno-parentheses",   "-Wno-ignored-optimization-argument", "-Wno-unknown-warning-option", "-Wno-class-memaccess"}
  
      filter { "toolset:gcc*"}
-         buildoptions { "-Wno-unused-but-set-variable", "-Wno-implicit-fallthrough"  }
+         buildoptions { "-Wno-implicit-fallthrough"  }
  
      filter { "toolset:clang" }
           buildoptions { "-Wno-deprecated-register", "-Wno-tautological-compare", "-Wno-missing-braces", "-Wno-undefined-var-template", "-Wno-unused-function", "-Wno-return-std-move"}
@@ -628,7 +666,7 @@ newoption {
  -- build items needed for other dependencies
  ---
  
- function generatorProject(name, sourcePath)
+ function generatorProject(name, sourcePath, isSharedLib)
      -- We use the `group` command here to specify that the
      -- next project we create shold be placed into a group
      -- named "generator" in a generated IDE solution/workspace.
@@ -642,9 +680,13 @@ newoption {
      -- Set up the project, but do NOT add any source files.
      baseSlangProject(name, sourcePath)
  
-     -- For now we just use static lib to force something
+     -- By default, just use static lib to force something
      -- to build.
-     kind "StaticLib"
+     if isSharedLib then
+         kind "SharedLib"
+     else
+        kind "StaticLib"
+    end
  end
  
  --
@@ -676,6 +718,9 @@ newoption {
  example "model-viewer"
  
  example "shader-object"
+     kind "ConsoleApp"
+ 
+ example "cpu-com-example"
      kind "ConsoleApp"
  
  example "cpu-hello-world"
@@ -780,6 +825,11 @@ standardProject("slang-rt", "source/slang-rt")
      includedirs { "." }
  
      links { "compiler-core", "core", "slang" }
+     
+tool "slangd"
+     uuid "B2D63B45-92B0-40F7-B242-CCA4DFD64341"
+     includedirs { "." }
+     links { "compiler-core", "core", "slang" }
  
  --
  -- `slang-generate` is a tool we use for source code generation on
@@ -875,7 +925,6 @@ standardProject("slang-rt", "source/slang-rt")
      kind "SharedLib"
      links { "core", "slang" }
      pic "On"
-     flags { "FatalWarnings" }
  
      defines { "SLANG_GFX_DYNAMIC", "SLANG_GFX_DYNAMIC_EXPORT" }
  
@@ -904,6 +953,7 @@ standardProject("slang-rt", "source/slang-rt")
          addSourceDir "tools/gfx/d3d"
          addSourceDir "tools/gfx/d3d11"
          addSourceDir "tools/gfx/d3d12"
+         flags { "FatalWarnings" }
      elseif targetInfo.os == "mingw" or targetInfo.os == "cygwin" then
          -- Don't support any render techs...
      elseif os.target() == "macosx" then
@@ -1222,7 +1272,7 @@ standardProject("slang-rt", "source/slang-rt")
  end
  
  if enableEmbedStdLib then
-     generatorProject("embed-stdlib-generator", nil)
+     generatorProject("embed-stdlib-generator", nil, true)
  
          -- We include these, even though they are not really part of the dummy
          -- build, so that the filters below can pick up the appropriate locations.
@@ -1295,6 +1345,10 @@ standardProject("slang-rt", "source/slang-rt")
      --
      defines { "SLANG_DYNAMIC_EXPORT" }
  
+     if disableStdlibSource then
+        defines { "SLANG_DISABLE_STDLIB_SOURCE" }
+     end
+ 
      if enableEmbedStdLib then
          -- We only have this dependency if we are embedding stdlib
          dependson { "embed-stdlib-generator" }
@@ -1363,7 +1417,7 @@ standardProject("slang-rt", "source/slang-rt")
      uuid "092DAB9F-1DA5-4538-ADD7-1A8D1DBFD519"
      includedirs { "." }
      addSourceDir "tools/unit-test"
-     links {  "core", "slang", "gfx", "gfx-util" }
+     links {  "core", "slang", "gfx", "gfx-util", "platform" }
  
  toolSharedLibrary "slang-unit-test"
      uuid "0162864E-7651-4B5E-9105-C571105276EA"
@@ -1542,4 +1596,4 @@ standardProject("slang-rt", "source/slang-rt")
  --
  
  end
- 
+

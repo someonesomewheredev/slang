@@ -6,9 +6,21 @@ public void writeln(String text);
 [DllImport("User32")]
 int MessageBoxA(Ptr<void> hwnd, String text, String caption, uint flags);
 
-public __extern_cpp int main()
+[COM]
+interface IObject
 {
-    writeln("hello world");
-    MessageBoxA(nullptr, "hello world!", "example", 0);
-    return 0;
+    int getValue(int value) throws int;
+}
+
+[DllImport("test-com")]
+IObject createObject();
+
+public __extern_cpp void main() throws int
+{
+    //writeln("hello world");
+    //MessageBoxA(nullptr, "hello world!", "example", 0);
+
+    IObject object = createObject();
+
+    int rs = try object.getValue(2);
 }

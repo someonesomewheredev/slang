@@ -31,6 +31,7 @@
 
 #include "../../source/compiler-core/slang-downstream-compiler.h"
 #include "../../source/compiler-core/slang-nvrtc-compiler.h"
+#include "../../source/compiler-core/slang-language-server-protocol.h"
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "external/stb/stb_image.h"
@@ -781,6 +782,8 @@ static PassThroughFlags _getPassThroughFlagsForTarget(SlangCompileTarget target)
         }
 
         case SLANG_SHADER_HOST_CALLABLE:
+        case SLANG_HOST_HOST_CALLABLE:
+
         case SLANG_HOST_EXECUTABLE:
         case SLANG_SHADER_SHARED_LIBRARY:
         {
@@ -1200,15 +1203,21 @@ static SlangResult _executeBinary(const UnownedStringSlice& hexDump, ExecuteResu
     List<uint8_t> data;
     SLANG_RETURN_ON_FAIL(HexDumpUtil::parseWithMarkers(hexDump, data));
 
+    TemporaryFileSet temporaryFileSet;
+
     // Need to write this off to a temporary file
-    String fileName;
-    SLANG_RETURN_ON_FAIL(File::generateTemporary(UnownedStringSlice("slang-test"), fileName));
+
+    String temporaryLockPath;
+
+    SLANG_RETURN_ON_FAIL(File::generateTemporary(UnownedStringSlice("slang-test"), temporaryLockPath));
+    String fileName = temporaryLockPath;
+    // And the temporary lock path
+    temporaryFileSet.add(temporaryLockPath);
 
     fileName.append(Process::getExecutableSuffix());
 
-    TemporaryFileSet temporaryFileSet;
     temporaryFileSet.add(fileName);
-
+    
     {
         ComPtr<ISlangWriter> writer;
         SLANG_RETURN_ON_FAIL(FileWriter::createBinary(fileName.getBuffer(), 0, writer));
@@ -1264,6 +1273,15 @@ static bool _areResultsEqual(TestOptions::Type type, const String& a, const Stri
             return false;
         }
     }
+}
+
+static String _calcModulePath(const TestInput& input)
+{
+    // Make the module name the same as the source file
+    auto filePath = input.filePath;
+    String directory = Path::getParentDirectory(input.outputStem);
+    String moduleName = Path::getFileNameWithoutExt(filePath);
+    return Path::combine(directory, moduleName);
 }
 
 TestResult runDocTest(TestContext* context, TestInput& input)
@@ -1324,6 +1342,418 @@ TestResult runDocTest(TestContext* context, TestInput& input)
         context->getTestReporter()->dumpOutputDifference(expectedOutput, actualOutput);
     }
 
+    return result;
+}
+
+TestResult runExecutableTest(TestContext* context, TestInput& input)
+{
+    DownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
+    if (!compiler)
+    {
+        return TestResult::Ignored;
+    }
+
+    // If we are just collecting requirements, say it passed
+    if (context->isCollectingRequirements())
+    {
+        std::lock_guard<std::mutex> lock(context->mutex);
+        context->getTestRequirements()->addUsedBackEnd(SLANG_PASS_THROUGH_GENERIC_C_CPP);
+        return TestResult::Pass;
+    }
+
+    auto filePath = input.filePath;
+    auto outputStem = input.outputStem;
+
+    String actualOutputPath = outputStem + ".actual";
+    File::remove(actualOutputPath);
+
+    // Make the module name the same as the source file
+    String ext = Path::getPathExt(filePath);
+    String modulePath = _calcModulePath(input);
+
+    // Remove the binary..
+    String moduleExePath;
+    {
+        StringBuilder buf;
+        buf << modulePath;
+        buf << Process::getExecutableSuffix();
+        moduleExePath = buf;
+    }
+
+    // Remove the exe if it exists
+    File::remove(moduleExePath);
+
+    CommandLine cmdLine;
+    _initSlangCompiler(context, cmdLine);
+
+    StringEscapeHandler* escapeHandler = StringEscapeUtil::getHandler(StringEscapeUtil::Style::Space);
+
+    List<String> args;
+    args.add(filePath);
+    args.add("-o");
+    args.add(moduleExePath);
+    args.add("-target");
+    args.add("exe");
+    for (auto arg : args)
+    {
+        // If unescaping is needed, do it
+        if (StringEscapeUtil::isUnescapeShellLikeNeeded(escapeHandler, arg.getUnownedSlice()))
+        {
+            StringBuilder buf;
+            StringEscapeUtil::unescapeShellLike(escapeHandler, arg.getUnownedSlice(), buf);
+            cmdLine.addArg(buf.ProduceString());
+        }
+        else
+        {
+            cmdLine.addArg(arg);
+        }
+    }
+    ExecuteResult exeRes;
+    TEST_RETURN_ON_DONE(spawnAndWait(context, outputStem, input.spawnType, cmdLine, exeRes));
+
+    String actualOutput;
+
+    // If the actual compilation failed, then the output will be the summary
+    if (exeRes.resultCode != 0)
+    {
+        actualOutput = getOutput(exeRes);
+    }
+    else
+    {
+        // Execute the binary and see what we get
+        CommandLine cmdLine;
+
+        ExecutableLocation exe;
+        exe.setPath(moduleExePath);
+
+        cmdLine.setExecutableLocation(exe);
+
+        File::makeExecutable(moduleExePath);
+
+        ExecuteResult exeRes;
+        if (SLANG_FAILED(ProcessUtil::execute(cmdLine, exeRes)))
+        {
+            return TestResult::Fail;
+        }
+
+        // Write the output, and compare to expected
+        actualOutput = getOutput(exeRes);
+    }
+
+    // Write the output
+    Slang::File::writeAllText(actualOutputPath, actualOutput);
+
+    // Check that they are the same
+    {
+        // Read the expected
+        String expectedOutput;
+
+        String expectedOutputPath = outputStem + ".expected";
+        Slang::File::readAllText(expectedOutputPath, expectedOutput);
+
+        // Compare if they are the same
+        if (!StringUtil::areLinesEqual(
+                actualOutput.getUnownedSlice(), expectedOutput.getUnownedSlice()))
+        {
+            context->getTestReporter()->dumpOutputDifference(expectedOutput, actualOutput);
+            return TestResult::Fail;
+        }
+    }
+
+    return TestResult::Pass;
+}
+
+TestResult runLanguageServerTest(TestContext* context, TestInput& input)
+{
+    if (!context->m_languageServerConnection)
+    {
+        if (SLANG_FAILED(context->createLanguageServerJSONRPCConnection(context->m_languageServerConnection)))
+        {
+            return TestResult::Fail;
+        }
+    }
+    if (context->isCollectingRequirements())
+    {
+        return TestResult::Pass;
+    }
+    auto connection = context->m_languageServerConnection.Ptr();
+    LanguageServerProtocol::InitializeParams initParams;
+    LanguageServerProtocol::WorkspaceFolder wsFolder;
+    wsFolder.name = "test";
+    String fullPath;
+    Path::getCanonical(input.filePath, fullPath);
+    wsFolder.uri = URI::fromLocalFilePath(Path::getParentDirectory(fullPath).getUnownedSlice()).uri;
+    initParams.workspaceFolders.add(wsFolder);
+    if (SLANG_FAILED(connection->sendCall(
+            LanguageServerProtocol::InitializeParams::methodName, &initParams, JSONValue::makeInt(0))))
+    {
+        return TestResult::Fail;
+    }
+    if (SLANG_FAILED(connection->waitForResult(-1)))
+    {
+        return TestResult::Fail;
+    }
+
+    LanguageServerProtocol::InitializeResult initResult;
+    if (SLANG_FAILED(connection->getMessage(&initResult)))
+    {
+        return TestResult::Fail;
+    }
+
+    // Send open document call.
+    String testFileContent;
+
+    if (SLANG_FAILED(File::readAllText(input.filePath, testFileContent)))
+    {
+        return TestResult::Fail;
+    }
+
+    LanguageServerProtocol::DidOpenTextDocumentParams openDocParams;
+    openDocParams.textDocument.version = 0;
+    openDocParams.textDocument.uri = URI::fromLocalFilePath(fullPath.getUnownedSlice()).uri;
+    openDocParams.textDocument.text = testFileContent;
+    connection->sendCall(
+        LanguageServerProtocol::DidOpenTextDocumentParams::methodName,
+        &openDocParams,
+        JSONValue::makeInt(1));
+    List<LanguageServerProtocol::PublishDiagnosticsParams> diagnostics;
+    bool diagnosticsReceived = false;
+    auto waitForNonDiagnosticResponse = [&]() -> SlangResult
+    {
+        repeat:
+        if (SLANG_FAILED(connection->waitForResult(-1)))
+            return SLANG_FAIL;
+        if (connection->getMessageType() == JSONRPCMessageType::Call)
+        {
+            JSONRPCCall call;
+            connection->getRPC(&call);
+            if (call.method == "textDocument/publishDiagnostics")
+            {
+                diagnosticsReceived = true;
+                LanguageServerProtocol::PublishDiagnosticsParams arg;
+                if (SLANG_FAILED(connection->getMessage(&arg)))
+                    return SLANG_FAIL;
+                diagnostics.add(arg);
+                goto repeat;
+            }
+        }
+        return SLANG_OK;
+    };
+
+    List<UnownedStringSlice> lines;
+    StringUtil::calcLines(testFileContent.getUnownedSlice(), lines);
+
+    StringBuilder actualOutputSB;
+    auto parseLocation = [&](UnownedStringSlice text, Index startPos, Int& linePos, Int& colPos)
+    {
+        linePos = StringUtil::parseIntAndAdvancePos(text.trimStart(), startPos);
+        startPos++;
+        colPos = StringUtil::parseIntAndAdvancePos(text.trimStart(), startPos);
+        return startPos;
+    };
+    int callId = 2;
+    for (auto line : lines)
+    {
+        if (line.startsWith("//COMPLETE:"))
+        {
+            auto arg = line.tail(UnownedStringSlice("//COMPLETE:").getLength());
+            Int linePos, colPos;
+            parseLocation(arg, 0, linePos, colPos);
+
+            LanguageServerProtocol::CompletionParams params;
+            params.position.line = int(linePos - 1);
+            params.position.character = int(colPos - 1);
+            params.textDocument.uri = openDocParams.textDocument.uri;
+            if (SLANG_FAILED(connection->sendCall(
+                    LanguageServerProtocol::CompletionParams::methodName,
+                    &params,
+                    JSONValue::makeInt(callId++))))
+            {
+                return TestResult::Fail;
+            }
+            if (SLANG_FAILED(waitForNonDiagnosticResponse()))
+                return TestResult::Fail;
+            actualOutputSB << "--------\n";
+            LanguageServerProtocol::NullResponse nullResponse;
+            List<LanguageServerProtocol::CompletionItem> completionItems;
+            if (SLANG_SUCCEEDED(connection->getMessage(&nullResponse)))
+            {
+                actualOutputSB << "null\n";
+            }
+            else if (SLANG_SUCCEEDED(connection->getMessage(&completionItems)))
+            {
+                for (auto item : completionItems)
+                {
+                    actualOutputSB << item.label << ": " << item.kind << " " << item.detail << " ";
+                    for (auto ch : item.commitCharacters)
+                        actualOutputSB << ch;
+                    actualOutputSB << "\n";
+                }
+            }
+        }
+        else if (line.startsWith("//SIGNATURE:"))
+        {
+            auto arg = line.tail(UnownedStringSlice("//SIGNATURE:").getLength());
+            Int linePos, colPos;
+            parseLocation(arg, 0, linePos, colPos);
+
+            LanguageServerProtocol::SignatureHelpParams params;
+            params.position.line = int(linePos - 1);
+            params.position.character = int(colPos - 1);
+            params.textDocument.uri = openDocParams.textDocument.uri;
+            if (SLANG_FAILED(connection->sendCall(
+                    LanguageServerProtocol::SignatureHelpParams::methodName,
+                    &params,
+                    JSONValue::makeInt(callId++))))
+            {
+                return TestResult::Fail;
+            }
+            if (SLANG_FAILED(waitForNonDiagnosticResponse()))
+                return TestResult::Fail;
+            actualOutputSB << "--------\n";
+            LanguageServerProtocol::NullResponse nullResponse;
+            LanguageServerProtocol::SignatureHelp sigInfo;
+            if (SLANG_SUCCEEDED(connection->getMessage(&nullResponse)))
+            {
+                actualOutputSB << "null\n";
+            }
+            else if (SLANG_SUCCEEDED(connection->getMessage(&sigInfo)))
+            {
+                actualOutputSB << "activeParameter: " << sigInfo.activeParameter << "\n";
+                actualOutputSB << "activeSignature: " << sigInfo.activeSignature << "\n";
+                for (auto item : sigInfo.signatures)
+                {
+                    actualOutputSB << item.label << ":";
+                    for (auto param : item.parameters)
+                    {
+                        actualOutputSB << " (" << param.label[0] << "," << param.label[1] << ")";
+                    }
+                    actualOutputSB << "\n";
+                    actualOutputSB << item.documentation.value << "\n";
+                }
+            }
+        }
+        else if (line.startsWith("//HOVER:"))
+        {
+            auto arg = line.tail(UnownedStringSlice("//HOVER:").getLength());
+            Int linePos, colPos;
+            parseLocation(arg, 0, linePos, colPos);
+
+            LanguageServerProtocol::HoverParams params;
+            params.position.line = int(linePos - 1);
+            params.position.character = int(colPos - 1);
+            params.textDocument.uri = openDocParams.textDocument.uri;
+            if (SLANG_FAILED(connection->sendCall(
+                    LanguageServerProtocol::HoverParams::methodName,
+                    &params,
+                    JSONValue::makeInt(callId++))))
+            {
+                return TestResult::Fail;
+            }
+            if (SLANG_FAILED(waitForNonDiagnosticResponse()))
+                return TestResult::Fail;
+            actualOutputSB << "--------\n";
+            LanguageServerProtocol::NullResponse nullResponse;
+            LanguageServerProtocol::Hover hover;
+            if (SLANG_SUCCEEDED(connection->getMessage(&nullResponse)))
+            {
+                actualOutputSB << "null\n";
+            }
+            else if (SLANG_SUCCEEDED(connection->getMessage(&hover)))
+            {
+                actualOutputSB << "range: " << hover.range.start.line << ","
+                               << hover.range.start.character << " - " << hover.range.end.line
+                               << "," << hover.range.end.character;
+                actualOutputSB << "\ncontent:\n" << hover.contents.value << "\n";
+            }
+        }
+        else if (line.startsWith("//DIAGNOSTICS"))
+        {
+            if (!diagnosticsReceived)
+            {
+                waitForNonDiagnosticResponse();
+            }
+            actualOutputSB << "--------\n";
+            for (auto item : diagnostics)
+            {
+                actualOutputSB << item.uri << "\n";
+                for (auto msg : item.diagnostics)
+                {
+                    actualOutputSB << msg.range.start.line << "," << msg.range.start.character
+                                   << "-" << msg.range.end.line << "," << msg.range.end.character
+                                   << " " << msg.message;
+                }
+            }
+        }
+    }
+    LanguageServerProtocol::DidCloseTextDocumentParams closeDocParams;
+    closeDocParams.textDocument.uri = URI::fromLocalFilePath(fullPath.getUnownedSlice()).uri;
+    connection->sendCall(
+        LanguageServerProtocol::DidCloseTextDocumentParams::methodName,
+        &closeDocParams,
+        JSONValue::makeInt(1));
+
+    auto outputStem = input.outputStem;
+    String expectedOutputPath = outputStem + ".expected.txt";
+    String expectedOutput;
+
+    Slang::File::readAllText(expectedOutputPath, expectedOutput);
+    expectedOutput = expectedOutput.trim();
+
+    TestResult result = TestResult::Pass;
+
+    auto actualOutput = actualOutputSB.ProduceString();
+
+    // Redact absolute file names from actualOutput
+    List<UnownedStringSlice> outputLines;
+    StringUtil::calcLines(actualOutput.getUnownedSlice(), outputLines);
+    StringBuilder redactedSB;
+    for (auto line : outputLines)
+    {
+        Index extIdx = line.indexOf(UnownedStringSlice(".slang"));
+        if (extIdx == -1)
+        {
+            redactedSB << line << "\n";
+            continue;
+        }
+        redactedSB << "{REDACTED}" << line.tail(extIdx) << "\n";
+    }
+
+    actualOutput = redactedSB.ProduceString().trim();
+
+    if (!_areResultsEqual(input.testOptions->type, expectedOutput, actualOutput))
+    {
+        if (expectedOutput.startsWith("CONTAINS"))
+        {
+            List<UnownedStringSlice> words;
+            List<UnownedStringSlice> expectedLines;
+            StringUtil::calcLines(expectedOutput.getUnownedSlice(), expectedLines);
+            if (expectedLines.getCount() >= 1)
+            {
+                StringUtil::split(expectedLines[0], ' ', words);
+                if (words.getCount() >= 2)
+                {
+                    if (actualOutput.contains(words[1].trim()))
+                    {
+                        return result;
+                    }
+                }
+            }
+        }
+        context->getTestReporter()->dumpOutputDifference(expectedOutput, actualOutput);
+        result = TestResult::Fail;
+    }
+
+    // If the test failed, then we write the actual output to a file
+    // so that we can easily diff it from the command line and
+    // diagnose the problem.
+    if (result == TestResult::Fail)
+    {
+        String actualOutputPath = outputStem + ".actual";
+        Slang::File::writeAllText(actualOutputPath, actualOutput);
+
+        context->getTestReporter()->dumpOutputDifference(expectedOutput, actualOutput);
+    }
     return result;
 }
 
@@ -1579,8 +2009,12 @@ static SlangResult _loadAsSharedLibrary(const UnownedStringSlice& hexDump, Tempo
     SLANG_RETURN_ON_FAIL(HexDumpUtil::parseWithMarkers(hexDump, data));
 
     // Need to write this off to a temporary file
-    String fileName;
-    SLANG_RETURN_ON_FAIL(File::generateTemporary(UnownedStringSlice("slang-test"), fileName));
+    
+    String temporaryLockPath;
+    SLANG_RETURN_ON_FAIL(File::generateTemporary(UnownedStringSlice("slang-test"), temporaryLockPath));
+    inOutTemporaryFileSet.add(temporaryLockPath);
+
+    String fileName = temporaryLockPath;
 
     // Need to work out the dll name
     String sharedLibraryName = SharedLibrary::calcPlatformPath(fileName.getUnownedSlice());
@@ -1709,15 +2143,6 @@ static String _calcSummary(const DownstreamDiagnostics& inOutput)
 
     output.appendSimplifiedSummary(builder);
     return builder;
-}
-
-static String _calcModulePath(const TestInput& input)
-{
-    // Make the module name the same as the source file
-    auto filePath = input.filePath;
-    String directory = Path::getParentDirectory(input.outputStem);
-    String moduleName = Path::getFileNameWithoutExt(filePath);
-    return Path::combine(directory, moduleName);
 }
 
 static TestResult runCPPCompilerCompile(TestContext* context, TestInput& input)
@@ -2983,6 +3408,8 @@ static const TestCommandInfo s_testCommandInfos[] =
     { "PERFORMANCE_PROFILE",                    &runPerformanceProfile,                     0 },
     { "COMPILE",                                &runCompile,                                0 },
     { "DOC",                                    &runDocTest,                                0 },
+    { "LANG_SERVER",                            &runLanguageServerTest,                     0},
+    { "EXECUTABLE",                             &runExecutableTest,                         RenderApiFlag::CPU}
 };
 
 const TestCommandInfo* _findTestCommandInfoByCommand(const UnownedStringSlice& name)
@@ -3723,6 +4150,24 @@ SlangResult innerMain(int argc, char** argv)
         }
 
         out.print("\n");
+    }
+
+    {
+        SlangSession* session = context.getSession();
+        
+        const bool hasLlvm = SLANG_SUCCEEDED(session->checkPassThroughSupport(SLANG_PASS_THROUGH_LLVM));
+        const auto hostCallableCompiler = session->getDownstreamCompilerForTransition(SLANG_CPP_SOURCE, SLANG_SHADER_HOST_CALLABLE);
+
+        if (hasLlvm && hostCallableCompiler == SLANG_PASS_THROUGH_LLVM && SLANG_PROCESSOR_X86)
+        {
+            // TODO(JS)
+            // For some reason host-callable with llvm/double produces different results on x86
+        }
+        else
+        {
+            // Special category to mark a test only works for targets that work correctly with double (ie not x86/llvm)
+            categorySet.add("war-double-host-callable", fullTestCategory);
+        }
     }
 
     // Working out what renderApis is worked on on demand through

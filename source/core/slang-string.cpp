@@ -134,12 +134,23 @@ namespace Slang
         if (otherSize > thisSize)
             return false;
 
-        return UnownedStringSlice(begin(), begin() + otherSize) == other;
+        return head(otherSize) == other;
     }
 
     bool UnownedStringSlice::startsWith(char const* str) const
     {
         return startsWith(UnownedTerminatedStringSlice(str));
+    }
+
+    bool UnownedStringSlice::startsWithCaseInsensitive(UnownedStringSlice const& other) const
+    {
+        UInt thisSize = getLength();
+        UInt otherSize = other.getLength();
+
+        if (otherSize > thisSize)
+            return false;
+
+        return head(otherSize).caseInsensitiveEquals(other);
     }
 
 
@@ -155,12 +166,27 @@ namespace Slang
             end() - otherSize, end()) == other;
     }
 
+    bool UnownedStringSlice::endsWithCaseInsensitive(UnownedStringSlice const& other) const
+    {
+        UInt thisSize = getLength();
+        UInt otherSize = other.getLength();
+
+        if (otherSize > thisSize)
+            return false;
+
+        return UnownedStringSlice(end() - otherSize, end()).caseInsensitiveEquals(other);
+    }
+
     bool UnownedStringSlice::endsWith(char const* str) const
     {
         return endsWith(UnownedTerminatedStringSlice(str));
     }
 
-    
+    bool UnownedStringSlice::endsWithCaseInsensitive(char const* str) const
+    {
+        return endsWithCaseInsensitive(UnownedTerminatedStringSlice(str));
+    }
+
     UnownedStringSlice UnownedStringSlice::trim() const
     {
         const char* start = m_begin;
@@ -459,6 +485,8 @@ namespace Slang
     {
         auto oldLength = getLength();
         auto textLength = textEnd - textBegin;
+        if (textLength <= 0)
+            return;
 
         auto newLength = oldLength + textLength;
 
@@ -618,7 +646,7 @@ namespace Slang
         const char* chars = m_begin;
         const char firstChar = inChars[0];
 
-        for (Int i = 0; i < len - inLen; ++i)
+        for (Int i = 0; i <= len - inLen; ++i)
         {
             if (chars[i] == firstChar && in == UnownedStringSlice(chars + i, inLen))
             {
@@ -690,5 +718,10 @@ namespace Slang
 
         return true;
     }
+}
 
+std::ostream& operator<< (std::ostream& stream, const Slang::String& s)
+{
+    stream << s.getBuffer();
+    return stream;
 }

@@ -133,6 +133,7 @@ void Session::init()
 
     // Initialize name pool
     getNamePool()->setRootNamePool(getRootNamePool());
+    m_completionTokenName = getNamePool()->getName("#?");
 
     m_sharedLibraryLoader = DefaultSharedLibraryLoader::getSingleton();
     
@@ -489,6 +490,56 @@ ISlangUnknown* Session::getInterface(const Guid& guid)
     return nullptr;
 }
 
+static size_t _getStructureSize(const uint8_t* src)
+{
+    size_t size = 0;
+    ::memcpy(&size, src, sizeof(size_t));
+    return size;
+}
+
+template <typename T>
+static T makeFromSizeVersioned(const uint8_t* src)
+{
+    // The structure size must be size_t
+    SLANG_COMPILE_TIME_ASSERT(sizeof(((T*)src)->structureSize) == sizeof(size_t));
+
+    // The structureSize field *must* be the first element of T
+    // Ideally would use SLANG_COMPILE_TIME_ASSERT, but that doesn't work on gcc. 
+    // Can't just assert, because determined to be a constant expression
+    {
+        auto offset = SLANG_OFFSET_OF(T, structureSize);
+        SLANG_ASSERT(offset == 0);
+        // Needed because offset is only 'used' by an assert
+        SLANG_UNUSED(offset);
+    }
+
+    // The source size is held in the first element of T, and will be in the first bytes of src.
+    const size_t srcSize = _getStructureSize(src);
+    const size_t dstSize = sizeof(T);
+
+    // If they are the same size, and appropriate alignment we can just cast and return
+    if (srcSize == dstSize && 
+        (size_t(src) & (SLANG_ALIGN_OF(T) - 1)) == 0)
+    {
+        return *(const T*)src;
+    }
+
+    // Assumes T can default constructed sensibly
+    T dst;
+
+    // It's structure size should be setup and should be dstSize
+    SLANG_ASSERT(dst.structureSize == dstSize);
+
+    // The size to copy is the minimum on the two sizes
+    const auto copySize = std::min(srcSize, dstSize);
+    ::memcpy(&dst, &src, copySize);
+
+    // The final struct size is the destination size
+    dst.structureSize = dstSize;
+
+    return dst;
+}
+
 SLANG_NO_THROW SlangResult SLANG_MCALL Session::createSession(
     slang::SessionDesc const&  desc,
     slang::ISession**          outSession)
@@ -496,18 +547,17 @@ SLANG_NO_THROW SlangResult SLANG_MCALL Session::createSession(
     RefPtr<ASTBuilder> astBuilder(new ASTBuilder(m_sharedASTBuilder, "Session::astBuilder"));
     RefPtr<Linkage> linkage = new Linkage(this, astBuilder, getBuiltinLinkage());
 
-    Int targetCount = desc.targetCount;
-    const uint8_t* targetDescPtr = reinterpret_cast<const uint8_t*>(desc.targets);
-    for (Int ii = 0; ii < targetCount; ++ii)
     {
-        slang::TargetDesc targetDesc;
-        // Copy the size field first.
-        memcpy(&targetDesc.structureSize, targetDescPtr, sizeof(size_t));
-        // Copy the entire desc structure.
-        memcpy(&targetDesc, targetDescPtr, targetDesc.structureSize);
-        linkage->addTarget(targetDesc);
-        targetDescPtr += targetDesc.structureSize;
+        const Int targetCount = desc.targetCount;
+        const uint8_t* targetDescPtr = reinterpret_cast<const uint8_t*>(desc.targets);
+        for (Int ii = 0; ii < targetCount; ++ii, targetDescPtr += _getStructureSize(targetDescPtr))
+        {
+            const auto targetDesc = makeFromSizeVersioned<slang::TargetDesc>(targetDescPtr);
+            linkage->addTarget(targetDesc);
+        }
     }
+
+    linkage->setFlags(desc.flags);
 
     if(desc.flags & slang::kSessionFlag_FalcorCustomSharedKeywordSemantics)
     {
@@ -529,6 +579,10 @@ SLANG_NO_THROW SlangResult SLANG_MCALL Session::createSession(
         linkage->addPreprocessorDefine(macro.name, macro.value);
     }
 
+    if (desc.fileSystem)
+    {
+        linkage->setFileSystem(desc.fileSystem);
+    }
     *outSession = asExternal(linkage.detach());
     return SLANG_OK;
 }
@@ -670,17 +724,17 @@ SlangPassThrough Session::getDownstreamCompilerForTransition(SlangCompileTarget 
         return (SlangPassThrough)m_codeGenTransitionMap.getTransition(source, target);
     }
 
+    const auto desc = ArtifactDesc::makeFromCompileTarget(inTarget);
+
     // Special case host-callable
-    if (target == CodeGenTarget::ShaderHostCallable)
+    if ((desc.kind == ArtifactKind::Callable) && 
+        (source == CodeGenTarget::CSource || source == CodeGenTarget::CPPSource))
     {
-        if (source == CodeGenTarget::CSource || source == CodeGenTarget::CPPSource)
+        // We prefer LLVM if it's available
+        DownstreamCompiler* llvm = getOrLoadDownstreamCompiler(PassThroughMode::LLVM, nullptr);
+        if (llvm)
         {
-            // We prefer LLVM if it's available
-            DownstreamCompiler* llvm = getOrLoadDownstreamCompiler(PassThroughMode::LLVM, nullptr);
-            if (llvm)
-            {
-                return SLANG_PASS_THROUGH_LLVM;
-            }
+            return SLANG_PASS_THROUGH_LLVM;
         }
     }
 
@@ -926,6 +980,12 @@ SLANG_NO_THROW slang::IModule* SLANG_MCALL Linkage::loadModule(
     slang::IBlob**  outDiagnostics)
 {
     DiagnosticSink sink(getSourceManager(), Lexer::sourceLocationLexer);
+
+    if (isInLanguageServer())
+    {
+        sink.setFlags(DiagnosticSink::Flag::HumaneLoc | DiagnosticSink::Flag::LanguageServer);
+    }
+
     try
     {
         auto name = getNamePool()->getName(moduleName);
@@ -945,9 +1005,16 @@ SLANG_NO_THROW slang::IModule* SLANG_MCALL Linkage::loadModule(
 
 SLANG_NO_THROW slang::IModule* SLANG_MCALL Linkage::loadModuleFromSource(
     const char* moduleName,
+    const char* path,
     slang::IBlob* source,
     slang::IBlob** outDiagnostics)
 {
+    DiagnosticSink sink(getSourceManager(), Lexer::sourceLocationLexer);
+    if (isInLanguageServer())
+    {
+        sink.setFlags(DiagnosticSink::Flag::HumaneLoc | DiagnosticSink::Flag::LanguageServer);
+    }
+
     try
     {
         auto name = getNamePool()->getName(moduleName);
@@ -956,10 +1023,9 @@ SLANG_NO_THROW slang::IModule* SLANG_MCALL Linkage::loadModuleFromSource(
         {
             return loadedModule;
         }
-        DiagnosticSink sink(getSourceManager(), Lexer::sourceLocationLexer);
         auto module = loadModule(
             name,
-            PathInfo::makeFromString(moduleName),
+            PathInfo::makeFromString(path),
             source,
             SourceLoc(),
             &sink,
@@ -970,6 +1036,7 @@ SLANG_NO_THROW slang::IModule* SLANG_MCALL Linkage::loadModuleFromSource(
     }
     catch (const AbortCompilationException&)
     {
+        sink.getBlobIfNeeded(outDiagnostics);
         return nullptr;
     }
 }
@@ -1334,6 +1401,7 @@ CapabilitySet TargetRequest::getTargetCaps()
     case CodeGenTarget::CPPSource:
     case CodeGenTarget::HostExecutable:
     case CodeGenTarget::ShaderSharedLibrary:
+    case CodeGenTarget::HostHostCallable:
     case CodeGenTarget::ShaderHostCallable:
         atoms.add(CapabilityAtom::CPP);
         break;
@@ -1419,8 +1487,14 @@ void TranslationUnitRequest::addSourceFile(SourceFile* sourceFile)
     }
 }
 
+EndToEndCompileRequest::~EndToEndCompileRequest()
+{
+    // Flush any writers associated with the request
+    m_writers->flushWriters();
 
-//
+    m_linkage.setNull();
+    m_frontEndReq.setNull();
+}
 
 static ISlangWriter* _getDefaultWriter(WriterChannel chan)
 {
@@ -1446,7 +1520,7 @@ void EndToEndCompileRequest::setWriter(WriterChannel chan, ISlangWriter* writer)
     // If the user passed in null, we will use the default writer on that channel
     m_writers->setWriter(SlangWriterChannel(chan), writer ? writer : _getDefaultWriter(chan));
 
-    // For diagnostic output, if the user passes in nullptr, we set on mSink.writer as that enables buffering on DiagnosticSink
+    // For diagnostic output, if the user passes in nullptr, we set on m_sink.writer as that enables buffering on DiagnosticSink
     if (chan == WriterChannel::Diagnostic)
     {
         m_sink.writer = writer; 
@@ -2566,17 +2640,29 @@ void Linkage::loadParsedModule(
     int errorCountBefore = sink->getErrorCount();
     compileRequest->checkAllTranslationUnits();
     int errorCountAfter = sink->getErrorCount();
-
-    if (errorCountAfter != errorCountBefore)
+    if (isInLanguageServer())
     {
-        // There must have been an error in the loaded module.
+        // Don't generate IR as language server.
+        // This means that we currently cannot report errors that are detected during IR passes.
+        // Ideally we want to run those passes, but that is too risky for what it is worth right
+        // now.
     }
     else
     {
-        // If we didn't run into any errors, then try to generate
-        // IR code for the imported module.
-        SLANG_ASSERT(errorCountAfter == 0);
-        loadedModule->setIRModule(generateIRForTranslationUnit(getASTBuilder(), translationUnit));
+        if (errorCountAfter != errorCountBefore)
+        {
+            // There must have been an error in the loaded module.
+        }
+        else
+        {
+            // If we didn't run into any errors, then try to generate
+            // IR code for the imported module.
+            if (errorCountAfter == 0)
+            {
+                loadedModule->setIRModule(
+                    generateIRForTranslationUnit(getASTBuilder(), translationUnit));
+            }
+        }
     }
     loadedModulesList.add(loadedModule);
 }
@@ -2601,7 +2687,10 @@ void Linkage::_diagnoseErrorInImportedModule(
     {
             sink->diagnose(info->importLoc, Diagnostics::errorInImportedModule, info->name);
     }
-    sink->diagnose(SourceLoc(), Diagnostics::complationCeased);
+    if (!isInLanguageServer())
+    {
+        sink->diagnose(SourceLoc(), Diagnostics::complationCeased);
+    }
 }
 
 RefPtr<Module> Linkage::loadModule(
@@ -2640,11 +2729,11 @@ RefPtr<Module> Linkage::loadModule(
     frontEndReq->parseTranslationUnit(translationUnit);
     int errorCountAfter = sink->getErrorCount();
 
-    if( errorCountAfter != errorCountBefore )
+    if (errorCountAfter != errorCountBefore && !isInLanguageServer())
     {
         _diagnoseErrorInImportedModule(sink);
     }
-    if (errorCountAfter)
+    if (errorCountAfter && !isInLanguageServer())
     {
         // Something went wrong during the parsing, so we should bail out.
         return nullptr;
@@ -2658,7 +2747,7 @@ RefPtr<Module> Linkage::loadModule(
 
     errorCountAfter = sink->getErrorCount();
 
-    if (errorCountAfter != errorCountBefore)
+    if (errorCountAfter != errorCountBefore && !isInLanguageServer())
     {
         _diagnoseErrorInImportedModule(sink);
         // Something went wrong during the parsing, so we should bail out.
@@ -2910,9 +2999,7 @@ static bool _canExportDeclSymbol(ASTNodeType type)
 {
     switch (type)
     {
-        case ASTNodeType::ModuleDecl:
         case ASTNodeType::EmptyDecl:
-        case ASTNodeType::NamespaceDecl:
         {
             return false;
         }
@@ -4147,6 +4234,11 @@ void EndToEndCompileRequest::setCompileFlags(SlangCompileFlags flags)
     getFrontEndReq()->compileFlags = flags;
 }
 
+SlangCompileFlags EndToEndCompileRequest::getCompileFlags()
+{
+    return getFrontEndReq()->compileFlags;
+}
+
 void EndToEndCompileRequest::setDumpIntermediates(int enable)
 {
     shouldDumpIntermediates = (enable != 0);
@@ -4156,6 +4248,18 @@ void EndToEndCompileRequest::setDumpIntermediates(int enable)
     for (auto& target : linkage->targets)
     {
         target->setDumpIntermediates(enable != 0);
+    }
+}
+
+void EndToEndCompileRequest::setTrackLiveness(bool v)
+{
+    enableLivenessTracking = v;
+
+    // Change all existing targets to use the new setting.
+    auto linkage = getLinkage();
+    for (auto& target : linkage->targets)
+    {
+        target->setTrackLiveness(v);
     }
 }
 
@@ -4234,6 +4338,45 @@ void EndToEndCompileRequest::setTargetLineDirectiveMode(
     SlangLineDirectiveMode mode)
 {
     getLinkage()->targets[targetIndex]->setLineDirectiveMode(LineDirectiveMode(mode));
+}
+
+void EndToEndCompileRequest::overrideDiagnosticSeverity(
+    SlangInt messageID,
+    SlangSeverity overrideSeverity)
+{
+    getSink()->overrideDiagnosticSeverity(int(messageID), Severity(overrideSeverity));
+}
+
+SlangDiagnosticFlags EndToEndCompileRequest::getDiagnosticFlags()
+{
+    DiagnosticSink::Flags sinkFlags = getSink()->getFlags();
+
+    SlangDiagnosticFlags flags = 0;
+
+    if (sinkFlags & DiagnosticSink::Flag::VerbosePath)
+        flags |= SLANG_DIAGNOSTIC_FLAG_VERBOSE_PATHS;
+
+    if (sinkFlags & DiagnosticSink::Flag::TreatWarningsAsErrors)
+        flags |= SLANG_DIAGNOSTIC_FLAG_TREAT_WARNINGS_AS_ERRORS;
+
+    return flags;
+}
+
+void EndToEndCompileRequest::setDiagnosticFlags(SlangDiagnosticFlags flags)
+{
+    DiagnosticSink::Flags sinkFlags = getSink()->getFlags();
+
+    if (flags & SLANG_DIAGNOSTIC_FLAG_VERBOSE_PATHS)
+        sinkFlags |= DiagnosticSink::Flag::VerbosePath;
+    else
+        sinkFlags &= ~DiagnosticSink::Flag::VerbosePath;
+
+    if (flags & SLANG_DIAGNOSTIC_FLAG_TREAT_WARNINGS_AS_ERRORS)
+        sinkFlags |= DiagnosticSink::Flag::TreatWarningsAsErrors;
+    else
+        sinkFlags &= ~DiagnosticSink::Flag::TreatWarningsAsErrors;
+
+    getSink()->setFlags(sinkFlags);
 }
 
 SlangResult EndToEndCompileRequest::addTargetCapability(SlangInt targetIndex, SlangCapabilityID capability)
@@ -4655,6 +4798,11 @@ static SlangResult _getWholeProgramResult(
     auto linkage = req->getLinkage();
     auto program = req->getSpecializedGlobalAndEntryPointsComponentType();
 
+    if (!program)
+    {
+        return SLANG_FAIL;
+    }
+
     Index targetCount = linkage->targets.getCount();
     if ((targetIndex < 0) || (targetIndex >= targetCount))
     {
@@ -4857,5 +5005,15 @@ SlangResult EndToEndCompileRequest::getEntryPoint(SlangInt entryPointIndex, slan
     *outEntryPoint = Slang::ComPtr<slang::IComponentType>(entryPoint).detach();
     return SLANG_OK;
 }
+
+SlangResult EndToEndCompileRequest::isParameterLocationUsed(Int entryPointIndex, Int targetIndex, SlangParameterCategory category, UInt spaceIndex, UInt registerIndex, bool& outUsed)
+{
+    CompileResult* compileResult = nullptr;
+    if (_getEntryPointResult(this, static_cast<int>(entryPointIndex), static_cast<int>(targetIndex), &compileResult) != SLANG_OK)
+        return SLANG_E_INVALID_ARG;
+
+    return compileResult->isParameterLocationUsed(category, spaceIndex, registerIndex, outUsed);
+}
+
 
 } // namespace Slang

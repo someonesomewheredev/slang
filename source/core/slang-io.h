@@ -27,6 +27,9 @@ namespace Slang
 
         static SlangResult makeExecutable(const String& fileName);
 
+            /// Creates a temporary file typically in some way based on the prefix
+            /// The file will be *created* with the outFileName, on success.
+            /// It's creation in necessary to lock that particular name.  
         static SlangResult generateTemporary(const UnownedStringSlice& prefix, String& outFileName);
     };
 
@@ -59,6 +62,12 @@ namespace Slang
         };
 
         static const char kPathDelimiter = '/';
+
+#if SLANG_WINDOWS_FAMILY
+        static const char kOSCanonicalPathDelimiter = '\\';
+#else
+        static const char kOSCanonicalPathDelimiter = '/';
+#endif
 
             /// Finds all all the items in the specified directory, that matches the pattern.
             ///
@@ -155,6 +164,23 @@ namespace Slang
             /// @param path
             /// @return SLANG_OK if file or directory is removed
         static SlangResult remove(const String& path);
+    };
+
+    struct URI
+    {
+        String uri;
+        bool operator==(const URI& other) const { return uri == other.uri; }
+        bool operator!=(const URI& other) const { return uri != other.uri; }
+
+        HashCode getHashCode() const { return uri.getHashCode(); }
+
+        bool isLocalFile() { return uri.startsWith("file://"); };
+        String getPath() const;
+        StringSlice getProtocol() const;
+
+        static URI fromLocalFilePath(UnownedStringSlice path);
+        static URI fromString(UnownedStringSlice uriString);
+        static bool isSafeURIChar(char ch);
     };
 
     // Helper class to clean up temporary files on dtor

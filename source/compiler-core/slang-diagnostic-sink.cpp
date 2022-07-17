@@ -138,6 +138,10 @@ static void formatDiagnostic(const HumaneSourceLoc& humaneLoc, Diagnostic const&
         outBuilder << humaneLoc.pathInfo.foundPath;
         outBuilder << "(";
         outBuilder << Int32(humaneLoc.line);
+        if (flags & DiagnosticSink::Flag::LanguageServer)
+        {
+            outBuilder << ", " << humaneLoc.column;
+        }
         outBuilder << "): ";
     }
 
@@ -348,6 +352,47 @@ static void _sourceLocationNoteDiagnostic(DiagnosticSink* sink, SourceView* sour
     sb << caretLine << "\n";
 }
 
+// Output the length of the token at `sourceLoc`. This is used by language server.
+static void _tokenLengthNoteDiagnostic(
+    DiagnosticSink* sink, SourceView* sourceView, SourceLoc sourceLoc, StringBuilder& sb)
+{
+    SourceFile* sourceFile = sourceView->getSourceFile();
+    if (!sourceFile)
+    {
+        return;
+    }
+
+    UnownedStringSlice content = sourceFile->getContent();
+
+    // Make sure the offset is within content.
+    // This is important because it's possible to have a 'SourceFile' that doesn't contain any
+    // content (for example when reconstructed via serialization with just line offsets, the actual
+    // source text 'content' isn't available).
+    const int offset = sourceView->getRange().getOffset(sourceLoc);
+    if (offset < 0 || offset >= content.getLength())
+    {
+        return;
+    }
+
+    // Work out the position of the SourceLoc in the source
+    const char* const pos = content.begin() + offset;
+
+    UnownedStringSlice line = _extractLineContainingPosition(content, pos);
+
+    // Trim any trailing white space
+    line = UnownedStringSlice(line.begin(), line.trim().end());
+
+    auto lexer = sink->getSourceLocationLexer();
+    if (lexer)
+    {
+        UnownedStringSlice token = lexer(UnownedStringSlice(pos, line.end()));
+
+        if (token.getLength() > 1)
+        {
+            sb << "^+" << token.getLength() << "\n";
+        }
+    }
+}
 
 static void formatDiagnostic(
     DiagnosticSink*     sink,
@@ -365,6 +410,7 @@ static void formatDiagnostic(
         {
             humaneLoc = sourceView->getHumaneLoc(sourceLoc);
         }
+        
         formatDiagnostic(humaneLoc, diagnostic, sink->getFlags(), sb);
 
         {
@@ -402,6 +448,12 @@ static void formatDiagnostic(
                 currentView = initiatingView;
             }
         }
+    }
+
+    // If we are a language server, output additional token length info.
+    if (sourceView && sink->isFlagSet(DiagnosticSink::Flag::LanguageServer))
+    {
+        _tokenLengthNoteDiagnostic(sink, sourceView, sourceLoc, sb);
     }
 
     // We don't don't output source line information if this is a 'note' as a note is extra information for one
@@ -525,8 +577,34 @@ void DiagnosticSink::diagnoseImpl(DiagnosticInfo const& info, const UnownedStrin
     }
 }
 
-void DiagnosticSink::diagnoseImpl(SourceLoc const& pos, DiagnosticInfo const& info, int argCount, DiagnosticArg const* const* args)
+Severity DiagnosticSink::getEffectiveMessageSeverity(DiagnosticInfo const& info)
 {
+    Severity effectiveSeverity = info.severity;
+
+    Severity* pSeverityOverride = m_severityOverrides.TryGetValue(info.id);
+
+    // See if there is an override
+    if (pSeverityOverride)
+    {
+        // Override the current severity, but don't allow lowering it if it's Error or Fatal
+        if (effectiveSeverity < Severity::Error || *pSeverityOverride >= effectiveSeverity)
+            effectiveSeverity = *pSeverityOverride;
+    }
+    
+    if (isFlagSet(Flag::TreatWarningsAsErrors) && info.severity == Severity::Warning)
+        effectiveSeverity = Severity::Error;
+
+    return effectiveSeverity;
+}
+
+void DiagnosticSink::diagnoseImpl(SourceLoc const& pos, DiagnosticInfo info, int argCount, DiagnosticArg const* const* args)
+{
+    // Override the severity in the 'info' structure to pass it further into formatDiagnostics
+    info.severity = getEffectiveMessageSeverity(info);
+
+    if (info.severity == Severity::Disable)
+        return;
+
     StringBuilder messageBuilder;
     {
         StringBuilder sb;
@@ -564,13 +642,13 @@ void DiagnosticSink::diagnoseRaw(
     // Did the client supply a callback for us to use?
     if(writer)
     {
-        // If so, pass the error string along to them
+        // If so, pass the error string along to them.
         writer->write(message.begin(), message.getLength());
     }
     else
     {
         // If the user doesn't have a callback, then just
-        // collect our diagnostic messages into a buffer
+        // collect our diagnostic messages into a buffer.
         outputBuffer.append(message);
     }
 

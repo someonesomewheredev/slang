@@ -47,6 +47,19 @@ class ErrorType : public Type
     Val* _substituteImplOverride(ASTBuilder* astBuilder, SubstitutionSet subst, int* ioDiff);
 };
 
+// The bottom/empty type that has no values.
+class BottomType : public Type
+{
+    SLANG_AST_CLASS(BottomType)
+
+    // Overrides should be public so base classes can access
+    void _toTextOverride(StringBuilder& out);
+    Type* _createCanonicalTypeOverride();
+    bool _equalsImplOverride(Type* type);
+    HashCode _getHashCodeOverride();
+    Val* _substituteImplOverride(ASTBuilder* astBuilder, SubstitutionSet subst, int* ioDiff);
+};
+
 // A type that takes the form of a reference to some declaration
 class DeclRefType : public Type 
 {
@@ -460,10 +473,22 @@ private:
     Type* rowType = nullptr;
 };
 
-// The built-in `String` type
-class StringType : public BuiltinType 
+// Base class for built in string types
+class StringTypeBase : public BuiltinType
+{
+    SLANG_AST_CLASS(StringTypeBase)
+};
+
+// The regular built-in `String` type
+class StringType : public StringTypeBase
 {
     SLANG_AST_CLASS(StringType)
+};
+
+// The string type native to the target
+class NativeStringType : public StringTypeBase
+{
+    SLANG_AST_CLASS(NativeStringType)
 };
 
 // The built-in `__Dynamic` type
@@ -500,10 +525,16 @@ class PtrType : public PtrTypeBase
     SLANG_AST_CLASS(PtrType)
 };
 
+/// A pointer-like type used to represent a parameter "direction"
+class ParamDirectionType : public PtrTypeBase
+{
+    SLANG_AST_CLASS(ParamDirectionType)
+};
+
 // A type that represents the behind-the-scenes
 // logical pointer that is passed for an `out`
 // or `in out` parameter
-class OutTypeBase : public PtrTypeBase 
+class OutTypeBase : public ParamDirectionType
 {
     SLANG_AST_CLASS(OutTypeBase)
 };
@@ -521,7 +552,7 @@ class InOutType : public OutTypeBase
 };
 
 // The type for an `ref` parameter, e.g., `ref T`
-class RefType : public PtrTypeBase 
+class RefType : public ParamDirectionType
 {
     SLANG_AST_CLASS(RefType)
 };
@@ -563,10 +594,14 @@ class FuncType : public Type
 
     List<Type*> paramTypes;
     Type* resultType = nullptr;
+    Type* errorType = nullptr;
 
     UInt getParamCount() { return paramTypes.getCount(); }
     Type* getParamType(UInt index) { return paramTypes[index]; }
     Type* getResultType() { return resultType; }
+    Type* getErrorType() { return errorType; }
+
+    ParameterDirection getParamDirection(Index index);
 
     // Overrides should be public so base classes can access
     void _toTextOverride(StringBuilder& out);

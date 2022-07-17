@@ -21,6 +21,7 @@
 
 #include "../compiler-core/slang-command-line-args.h"
 #include "../compiler-core/slang-artifact-info.h"
+#include "../compiler-core/slang-core-diagnostics.h"
 
 #include <assert.h>
 
@@ -550,6 +551,9 @@ struct OptionsParser
             "      glsl, hlsl, spirv, spirv-assembly, dxbc,\n"
             "      dxbc-assembly, dxil, dxil-assembly\n"
             "  -v, -version: Display the build version.\n"
+            "  -warnings-as-errors all: Treat all warnings as errors.\n"
+            "  -warnings-as-errors <id>[,<id>...]: Treat specific warning ids as errors.\n"
+            "  -warnings-disable <id>[,<id>...]: Disable specific warning ids.\n"
             "  --: Treat the rest of the command line as input files.\n"
             "\n"
             "Target code generation options:\n"
@@ -652,6 +656,7 @@ struct OptionsParser
             "  -save-stdlib <filename>: Save the StdLib modules to an archive file.\n"
             "  -save-stdlib-bin-source <filename>: Same as -save-stdlib but output\n"
             "      the data as a C array.\n"
+            "  -track-liveness: Enable liveness tracking. Places SLANG_LIVE_START, and SLANG_LIVE_END in output source to indicate value liveness.\n"
             "\n"
             "Deprecated options (allowed but ignored; may be removed in future):\n"
             "\n"
@@ -701,6 +706,25 @@ struct OptionsParser
             "\n";
 
 #undef EXECUTABLE_EXTENSION
+    }
+
+    SlangResult overrideDiagnosticSeverity(String const& identifierList, Severity overrideSeverity)
+    {
+        List<UnownedStringSlice> slices;
+        StringUtil::split(identifierList.getUnownedSlice(), ',', slices);
+        Index sliceCount = slices.getCount();
+
+        for (Index i = 0; i < sliceCount; ++i)
+        {
+            UnownedStringSlice warningIdentifier = slices[i];
+
+            Int warningIndex = -1;
+            SLANG_RETURN_ON_FAIL(StringUtil::parseInt(warningIdentifier, warningIndex));
+
+            requestImpl->getSink()->overrideDiagnosticSeverity(int(warningIndex), overrideSeverity);
+        }
+
+        return SLANG_OK;
     }
 
     SlangResult parse(
@@ -1000,9 +1024,40 @@ struct OptionsParser
                 {
                     requestImpl->disableDynamicDispatch = true;
                 }
+                else if (argValue == "-track-liveness")
+                {
+                    requestImpl->setTrackLiveness(true);
+                }
                 else if (argValue == "-verbose-paths")
                 {
                     requestImpl->getSink()->setFlag(DiagnosticSink::Flag::VerbosePath);
+                }
+                else if (argValue == "-warnings-as-errors")
+                {
+                    CommandLineArg operand;
+                    SLANG_RETURN_ON_FAIL(reader.expectArg(operand));
+
+                    if (operand.value == "all")
+                        requestImpl->getSink()->setFlag(DiagnosticSink::Flag::TreatWarningsAsErrors);
+                    else
+                    {
+                        if (SLANG_FAILED(overrideDiagnosticSeverity(operand.value, Severity::Error)))
+                        {
+                            sink->diagnose(operand.loc, MiscDiagnostics::invalidArgumentForOption, "-warnings-as-errors");
+                            return SLANG_FAIL;
+                        }
+                    }
+                }
+                else if (argValue == "-warnings-disable")
+                {
+                    CommandLineArg operand;
+                    SLANG_RETURN_ON_FAIL(reader.expectArg(operand));
+
+                    if (SLANG_FAILED(overrideDiagnosticSeverity(operand.value, Severity::Disable)))
+                    {
+                        sink->diagnose(operand.loc, MiscDiagnostics::invalidArgumentForOption, "-warnings-disable");
+                        return SLANG_FAIL;
+                    }
                 }
                 else if (argValue == "-verify-debug-serial-ir")
                 {
@@ -1977,6 +2032,18 @@ struct OptionsParser
             }
         }
 
+        // If we don't have any raw outputs but do have a raw target,
+        // and output type is callable, add an empty' rawOutput.
+        if (rawOutputs.getCount() == 0 && 
+            rawTargets.getCount() == 1 && 
+            ArtifactDesc::makeFromCompileTarget(asExternal(rawTargets[0].format)).kind == ArtifactKind::Callable)
+        {
+            RawOutput rawOutput;
+            rawOutput.impliedFormat = rawTargets[0].format;
+            rawOutput.targetIndex = 0;
+            rawOutputs.add(rawOutput);
+        }
+
         // Consider the output files specified via `-o` and try to figure
         // out how to deal with them.
         //
@@ -2028,6 +2095,8 @@ struct OptionsParser
                     case CodeGenTarget::CPPSource:
                     case CodeGenTarget::PTX:
                     case CodeGenTarget::CUDASource:
+
+                    case CodeGenTarget::HostHostCallable:
                     case CodeGenTarget::ShaderHostCallable:
                     case CodeGenTarget::HostExecutable:
                     case CodeGenTarget::ShaderSharedLibrary:
@@ -2043,6 +2112,7 @@ struct OptionsParser
                 }
             }
         }
+
 
         // Now that we've diagnosed the output paths, we can add them
         // to the compile request at the appropriate locations.

@@ -24,7 +24,10 @@ INST(Nop, nop, 0, 0)
 
     INST_RANGE(BasicType, VoidType, AfterBaseType)
 
-    INST(StringType, String, 0, 0)
+    /* StringTypeBase */
+        INST(StringType, String, 0, 0)
+        INST(NativeStringType, NativeString, 0, 0)
+    INST_RANGE(StringTypeBase, StringType, NativeStringType)
 
     INST(CapabilitySetType, CapabilitySet, 0, 0)
 
@@ -53,6 +56,7 @@ INST(Nop, nop, 0, 0)
 
     INST(ConjunctionType, Conjunction, 0, 0)
     INST(AttributedType, Attributed, 0, 0)
+    INST(ResultType, Result, 2, 0)
 
     /* BindExistentialsTypeBase */
 
@@ -75,6 +79,7 @@ INST(Nop, nop, 0, 0)
     /* Rate */
         INST(ConstExprRate, ConstExpr, 0, 0)
         INST(GroupSharedRate, GroupShared, 0, 0)
+        INST(ActualGlobalRate, ActualGlobalRate, 0, 0)
     INST_RANGE(Rate, ConstExprRate, GroupSharedRate)
 
     INST(RateQualifiedType, RateQualified, 2, 0)
@@ -104,6 +109,11 @@ INST(Nop, nop, 0, 0)
             INST(InOutType, InOut, 1, 0)
         INST_RANGE(OutTypeBase, OutType, InOutType)
     INST_RANGE(PtrTypeBase, PtrType, InOutType)
+
+    // A ComPtr<T> type is treated as a opaque type that represents a reference-counted handle to a COM object.
+    INST(ComPtrType, ComPtr, 1, 0)
+    // A NativePtr<T> type represents a native pointer to a managed resource.
+    INST(NativePtrType, NativePtr, 1, 0)
 
     /* SamplerStateTypeBase */
         INST(SamplerStateType, SamplerState, 0, 0)
@@ -188,12 +198,16 @@ INST(Nop, nop, 0, 0)
 // `field` instructions.
 //
 INST(StructType, struct, 0, PARENT)
+INST(ClassType, class, 0, PARENT)
 INST(InterfaceType, interface, 0, 0)
 INST(AssociatedType, associated_type, 0, 0)
 INST(ThisType, this_type, 0, 0)
 INST(RTTIType, rtti_type, 0, 0)
 INST(RTTIHandleType, rtti_handle_type, 0, 0)
 INST(TupleType, tuple_type, 0, 0)
+
+// A type that identifies it's contained type as being emittable as `spirv_literal.
+INST(SPIRVLiteralType, spirvLiteralType, 1, 0)
 
 // A TypeType-typed IRValue represents a IRType.
 // It is used to represent a type parameter/argument in a generics.
@@ -238,7 +252,8 @@ INST(Block, block, 0, PARENT)
     INST(FloatLit, float_constant, 0, 0)
     INST(PtrLit, ptr_constant, 0, 0)
     INST(StringLit, string_constant, 0, 0)
-INST_RANGE(Constant, BoolLit, StringLit)
+    INST(VoidLit, void_constant, 0, 0)
+INST_RANGE(Constant, BoolLit, VoidLit)
 
 INST(CapabilitySet, capabilitySet, 0, 0)
 
@@ -257,6 +272,7 @@ INST(lookup_witness_table, lookup_witness_table, 2, 0)
 INST(BindGlobalGenericParam, bind_global_generic_param, 2, 0)
 
 INST(Construct, construct, 0, 0)
+INST(AllocObj, allocObj, 0, 0)
 
 INST(makeUInt64, makeUInt64, 2, 0)
 INST(makeVector, makeVector, 0, 0)
@@ -265,6 +281,11 @@ INST(makeArray, makeArray, 0, 0)
 INST(makeStruct, makeStruct, 0, 0)
 INST(MakeTuple, makeTuple, 0, 0)
 INST(GetTupleElement, getTupleElement, 2, 0)
+INST(MakeResultValue, makeResultValue, 1, 0)
+INST(MakeResultError, makeResultError, 1, 0)
+INST(IsResultError, isResultError, 1, 0)
+INST(GetResultError, getResultError, 1, 0)
+INST(GetResultValue, getResultValue, 1, 0)
 
 INST(Call, call, 1, 0)
 
@@ -290,6 +311,24 @@ INST(FieldAddress, get_field_addr, 2, 0)
 INST(getElement, getElement, 2, 0)
 INST(getElementPtr, getElementPtr, 2, 0)
 INST(getAddr, getAddr, 1, 0)
+
+// Get an unowned NativeString from a String.
+INST(getNativeStr, getNativeStr, 1, 0)
+
+// Make String from a NativeString.
+INST(makeString, makeString, 1, 0)
+
+// Get a native ptr from a ComPtr or RefPtr
+INST(GetNativePtr, getNativePtr, 1, 0)
+
+// Get a write reference to a managed ptr var (operand must be Ptr<ComPtr<T>> or Ptr<RefPtr<T>>).
+INST(GetManagedPtrWriteRef, getManagedPtrWriteRef, 1, 0)
+
+// Attach a managedPtr var to a NativePtr without changing its ref count.
+INST(ManagedPtrAttach, ManagedPtrAttach, 1, 0)
+
+// Attach a managedPtr var to a NativePtr without changing its ref count.
+INST(ManagedPtrDetach, ManagedPtrDetach, 1, 0)
 
 // "Subscript" an image at a pixel coordinate to get pointer
 INST(ImageSubscript, imageSubscript, 2, 0)
@@ -406,9 +445,7 @@ INST(SwizzledStore, swizzledStore, 2, 0)
 
 /* IRTerminatorInst */
 
-    INST(ReturnVal, return_val, 1, 0)
-    INST(ReturnVoid, return_void, 1, 0)
-
+    INST(Return, return_val, 1, 0)
     /* IRUnconditionalBranch */
         // unconditionalBranch <target>
         INST(unconditionalBranch, unconditionalBranch, 1, 0)
@@ -426,6 +463,9 @@ INST(SwizzledStore, swizzledStore, 2, 0)
         INST(ifElse, ifElse, 4, 0)
     INST_RANGE(ConditionalBranch, conditionalBranch, ifElse)
 
+    INST(Throw, throw, 1, 0)
+    // tryCall <successBlock> <failBlock> <callee> <args>...
+    INST(TryCall, tryCall, 3, 0)
     // switch <val> <break> <default> <caseVal1> <caseBlock1> ...
     INST(Switch, switch, 3, 0)
 
@@ -436,7 +476,7 @@ INST(SwizzledStore, swizzledStore, 2, 0)
         INST(Unreachable, unreachable, 0, 0)
     INST_RANGE(Unreachable, MissingReturn, Unreachable)
 
-INST_RANGE(TerminatorInst, ReturnVal, Unreachable)
+INST_RANGE(TerminatorInst, Return, Unreachable)
 
 // TODO: We should consider splitting the basic arithmetic/comparison
 // ops into cases for signed integers, unsigned integers, and floating-point
@@ -546,6 +586,7 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
     INST(GloballyCoherentDecoration,        globallyCoherent,       0, 0)
     INST(PreciseDecoration,                 precise,                0, 0)
     INST(PublicDecoration,                  public,                 0, 0)
+    INST(HLSLExportDecoration,              hlslExport,             0, 0)
     INST(PatchConstantFuncDecoration,       patchConstantFunc,      1, 0)
 
     INST(OutputControlPointsDecoration,     outputControlPoints,    1, 0)
@@ -605,6 +646,8 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
         /// An dllImport decoration marks a function as imported from a DLL. Slang will generate dynamic function loading logic to use this function at runtime.
     INST(DllImportDecoration, dllImport, 2, 0)
 
+        /// Marks an interface as a COM interface declaration.
+    INST(ComInterfaceDecoration, COMInterface, 0, 0)
 
     /* Decorations for RTTI objects */
     INST(RTTITypeSizeDecoration, RTTI_typeSize, 1, 0)
@@ -637,6 +680,15 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
     INST_RANGE(StageAccessDecoration, StageReadAccessDecoration, StageWriteAccessDecoration)
 
     INST(SemanticDecoration, semantic, 2, 0)
+
+    INST(SPIRVOpDecoration, spirvOpDecoration, 1, 0)
+
+        /// Decorated function is marked for the forward-mode differentiation pass.
+    INST(JVPDerivativeMarkerDecoration, differentiateJvp, 0, 0)
+
+        /// Used by the auto-diff pass to hold a reference to the
+        /// generated derivative function.
+    INST(JVPDerivativeReferenceDecoration, jvpFnReference, 1, 0)
 
         /// Marks a struct type as being used as a structured buffer block.
         /// Recognized by SPIRV-emit pass so we can emit a SPIRV `BufferBlock` decoration.
@@ -681,6 +733,8 @@ INST(ExtractTaggedUnionPayload,         extractTaggedUnionPayload,  1, 0)
 INST(BitCast,                           bitCast,                    1, 0)
 INST(Reinterpret,                       reinterpret,                1, 0)
 
+INST(JVPDifferentiate,                   jvpDifferentiate,            1, 0)
+
 // Converts other resources (such as ByteAddressBuffer) to the equivalent StructuredBuffer
 INST(GetEquivalentStructuredBuffer,     getEquivalentStructuredBuffer, 1, 0)
 
@@ -716,7 +770,19 @@ INST_RANGE(Layout, VarLayout, EntryPointLayout)
         INST(TypeSizeAttr, size, 2, 0)
         INST(VarOffsetAttr, offset, 2, 0)
     INST_RANGE(LayoutResourceInfoAttr, TypeSizeAttr, VarOffsetAttr)
-INST_RANGE(Attr, PendingLayoutAttr, VarOffsetAttr)
+    INST(FuncThrowTypeAttr, FuncThrowType, 1, 0)
+INST_RANGE(Attr, PendingLayoutAttr, FuncThrowTypeAttr)
+
+/* Liveness */
+    INST(LiveRangeStart, liveRangeStart, 2, 0)
+    INST(LiveRangeEnd, liveRangeEnd, 0, 0)
+INST_RANGE(LiveRangeMarker, LiveRangeStart, LiveRangeEnd)
+
+/* IRSpecialization */
+INST(SpecializationDictionaryItem, SpecializationDictionaryItem, 0, 0)
+INST(GenericSpecializationDictionary, GenericSpecializationDictionary, 0, PARENT)
+INST(ExistentialFuncSpecializationDictionary, ExistentialFuncSpecializationDictionary, 0, PARENT)
+INST(ExistentialTypeSpecializationDictionary, ExistentialTypeSpecializationDictionary, 0, PARENT)
 
 #undef PARENT
 #undef USE_OTHER

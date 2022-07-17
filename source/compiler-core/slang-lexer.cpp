@@ -1167,6 +1167,9 @@ namespace Slang
             switch(_peek(lexer))
             {
             case '#': _advance(lexer); return TokenType::PoundPound;
+
+            case '?': _advance(lexer); return TokenType::CompletionRequest;
+
             default:
                 return TokenType::Pound;
             }
@@ -1337,9 +1340,12 @@ namespace Slang
                 }
             }
 
-            if (tokenType == TokenType::Identifier)
+            if (m_namePool)
             {
-                token.setName(m_namePool->getName(token.getContent()));
+                if (tokenType == TokenType::Identifier || tokenType == TokenType::CompletionRequest)
+                {
+                    token.setName(m_namePool->getName(token.getContent()));
+                }
             }
 
             return token;

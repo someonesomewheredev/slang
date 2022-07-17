@@ -14,13 +14,13 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\tools\slang-unit-test\unit-offset-container.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-byte-encode.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-chunked-list.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-com-host-callable.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-command-line-args.cpp">
@@ -35,6 +35,9 @@
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-free-list.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-io.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-json-native.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -42,6 +45,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-memory-arena.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-offset-container.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-path.cpp">
@@ -59,6 +65,9 @@
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-short-list.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-string-escape.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\..\tools\slang-unit-test\unit-test-string.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -68,5 +77,10 @@
     <ClCompile Include="..\..\..\tools\unit-test\slang-unit-test.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\tools\slang-unit-test\unit-test-com-host-callable.slang">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

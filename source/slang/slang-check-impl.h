@@ -160,6 +160,7 @@ namespace Slang
             Func,
             Generic,
             UnspecializedGeneric,
+            Expr,
         };
         Flavor flavor;
 
@@ -177,6 +178,9 @@ namespace Slang
 
         // Reference to the declaration being applied
         LookupResultItem item;
+
+        // Type of function being applied (for cases where `item` is not used)
+        FuncType* funcType = nullptr;
 
         // The type of the result expression if this candidate is selected
         Type*	resultType = nullptr;
@@ -255,6 +259,12 @@ namespace Slang
             return m_module;
         }
 
+        bool isInLanguageServer()
+        {
+            if (m_linkage)
+                return m_linkage->isInLanguageServer();
+            return false;
+        }
             /// Get the list of extension declarations that appear to apply to `decl` in this context
         List<ExtensionDecl*> const& getCandidateExtensionsForTypeDecl(AggTypeDecl* decl);
 
@@ -272,26 +282,51 @@ namespace Slang
         void _addCandidateExtensionsFromModule(ModuleDecl* moduleDecl);
     };
 
-    struct SemanticsVisitor
+        /// Local/scoped state of the semantic-checking system
+        ///
+        /// This type is kept distinct from `SharedSemanticsContext` so that we
+        /// can avoid unncessary mutable state being propagated through the
+        /// checking process.
+        ///
+        /// Semantic-checking code should make a new local `SemanticsContext`
+        /// in cases where it want to check a sub-entity (expression, statement,
+        /// declaration, etc.) in a modified or extended context.
+        ///
+    struct SemanticsContext
     {
-        SemanticsVisitor(
+    public:
+        explicit SemanticsContext(
             SharedSemanticsContext* shared)
-            : m_shared(shared),
-            m_astBuilder(shared->getLinkage()->getASTBuilder())
+            : m_shared(shared)
+            , m_sink(shared->getSink())
+            , m_astBuilder(shared->getLinkage()->getASTBuilder())
         {}
 
-        SharedSemanticsContext* m_shared = nullptr;
-        ASTBuilder* m_astBuilder = nullptr;
-
         SharedSemanticsContext* getShared() { return m_shared; }
-        ASTBuilder* getASTBuilder() { return m_astBuilder;}
+        ASTBuilder* getASTBuilder() { return m_astBuilder; }
 
-        DiagnosticSink* getSink() { return m_shared->getSink(); }
+        DiagnosticSink* getSink() { return m_sink; }
 
         Session* getSession() { return m_shared->getSession(); }
 
         Linkage* getLinkage() { return m_shared->m_linkage; }
         NamePool* getNamePool() { return getLinkage()->getNamePool(); }
+        SourceManager* getSourceManager() { return getLinkage()->getSourceManager(); }
+
+        SemanticsContext withSink(DiagnosticSink* sink)
+        {
+            SemanticsContext result(*this);
+            result.m_sink = sink;
+            return result;
+        }
+
+        SemanticsContext withParentFunc(FunctionDeclBase* parentFunc)
+        {
+            SemanticsContext result(*this);
+            result.m_parentFunc = parentFunc;
+            result.m_outerStmts = nullptr;
+            return result;
+        }
 
             /// Information for tracking one or more outer statements.
             ///
@@ -307,9 +342,93 @@ namespace Slang
             ///
         struct OuterStmtInfo
         {
-            Stmt*           stmt = nullptr;
-            OuterStmtInfo*  next;
+            Stmt* stmt = nullptr;
+            OuterStmtInfo* next;
         };
+
+        OuterStmtInfo* getOuterStmts() { return m_outerStmts; }
+
+        SemanticsContext withOuterStmts(OuterStmtInfo* outerStmts)
+        {
+            SemanticsContext result(*this);
+            result.m_outerStmts = outerStmts;
+            return result;
+        }
+
+        TryClauseType getEnclosingTryClauseType() { return m_enclosingTryClauseType; }
+
+        SemanticsContext withEnclosingTryClauseType(TryClauseType tryClauseType)
+        {
+            SemanticsContext result(*this);
+            result.m_enclosingTryClauseType = tryClauseType;
+            return result;
+        }
+
+            /// A scope that is local to a particular expression, and
+            /// that can be used to allocate temporary bindings that
+            /// might be needed by that expression or its sub-expressions.
+            ///
+            /// The scope is represented as a sequence of nested `LetExpr`s
+            /// that introduce the bindings needed in the scope.
+            ///
+        struct ExprLocalScope
+        {
+        public:
+            void addBinding(LetExpr* binding);
+
+            LetExpr* getOuterMostBinding() const { return m_outerMostBinding; }
+
+        private:
+            LetExpr* m_outerMostBinding = nullptr;
+            LetExpr* m_innerMostBinding = nullptr;
+        };
+
+        ExprLocalScope* getExprLocalScope() { return m_exprLocalScope; }
+
+        SemanticsContext withExprLocalScope(ExprLocalScope* exprLocalScope)
+        {
+            SemanticsContext result(*this);
+            result.m_exprLocalScope = exprLocalScope;
+            return result;
+        }
+
+    private:
+        SharedSemanticsContext* m_shared = nullptr;
+
+        DiagnosticSink* m_sink = nullptr;
+
+        ExprLocalScope* m_exprLocalScope = nullptr;
+
+
+    protected:
+        // TODO: consider making more of this state `private`...
+
+            /// The parent function (if any) that surrounds the statement being checked.
+        FunctionDeclBase* m_parentFunc = nullptr;
+
+            /// The linked list of lexically surrounding statements.
+        OuterStmtInfo* m_outerStmts = nullptr;
+
+            /// The type of a try clause (if any) enclosing current expr.
+        TryClauseType m_enclosingTryClauseType = TryClauseType::None;
+
+        ASTBuilder* m_astBuilder = nullptr;
+    };
+
+    struct SemanticsVisitor : public SemanticsContext
+    {
+        typedef SemanticsContext Super;
+
+        explicit SemanticsVisitor(
+            SharedSemanticsContext* shared)
+            : Super(shared)
+        {}
+
+        SemanticsVisitor(
+            SemanticsContext const& context)
+            : Super(context)
+        {}
+
 
     public:
         // Translate Types
@@ -383,7 +502,8 @@ namespace Slang
         Expr* ConstructDeclRefExpr(
             DeclRef<Decl>   declRef,
             Expr*    baseExpr,
-            SourceLoc       loc);
+            SourceLoc loc,
+            Expr*    originalExpr);
 
         Expr* ConstructDerefExpr(
             Expr*    base,
@@ -392,13 +512,15 @@ namespace Slang
         Expr* ConstructLookupResultExpr(
             LookupResultItem const& item,
             Expr*            baseExpr,
-            SourceLoc               loc);
+            SourceLoc loc,
+            Expr* originalExpr);
 
         Expr* createLookupResultExpr(
             Name*                   name,
             LookupResult const&     lookupResult,
             Expr*            baseExpr,
-            SourceLoc               loc);
+            SourceLoc loc,
+            Expr*    originalExpr);
 
             /// Attempt to "resolve" an overloaded `LookupResult` to only include the "best" results
         LookupResult resolveOverloadedLookup(LookupResult const& lookupResult);
@@ -449,8 +571,8 @@ namespace Slang
         // so that we can add some quality-of-life features for users
         // in cases where the compiler crashes
         //
-        void dispatchStmt(Stmt* stmt, FunctionDeclBase* parentFunc, OuterStmtInfo* outerStmts);
-        void dispatchExpr(Expr* expr);
+        void dispatchStmt(Stmt* stmt, SemanticsContext const& context);
+        Expr* dispatchExpr(Expr* expr, SemanticsContext const& context);
 
             /// Ensure that a declaration has been checked up to some state
             /// (aka, a phase of semantic checking) so that we can safely
@@ -462,7 +584,7 @@ namespace Slang
             /// on this function to avoid blowing out the stack or (even worse
             /// creating a circular dependency).
             ///
-        void ensureDecl(Decl* decl, DeclCheckState state);
+        void ensureDecl(Decl* decl, DeclCheckState state, SemanticsContext* baseContext = nullptr);
 
             /// Helper routine allowing `ensureDecl` to be called on a `DeclRef`
         void ensureDecl(DeclRefBase const& declRef, DeclCheckState state)
@@ -476,7 +598,7 @@ namespace Slang
             /// called on a `DeclGroup` this function just calls `ensureDecl()`
             /// on each declaration in the group.
             ///
-        void ensureDeclBase(DeclBase* decl, DeclCheckState state);
+        void ensureDeclBase(DeclBase* decl, DeclCheckState state, SemanticsContext* baseContext);
 
         // A "proper" type is one that can be used as the type of an expression.
         // Put simply, it can be a concrete type like `int`, or a generic
@@ -542,6 +664,7 @@ namespace Slang
             ///
         void _validateCircularVarDefinition(VarDeclBase* varDecl);
 
+        bool shouldSkipChecking(Decl* decl, DeclCheckState state);
     public:
 
         bool ValuesAreEqual(
@@ -899,7 +1022,7 @@ namespace Slang
         // as the tag type for an `enum`
         void validateEnumTagType(Type* type, SourceLoc const& loc);
 
-        void checkStmt(Stmt* stmt, FunctionDeclBase* outerFunction, OuterStmtInfo* outerStmts);
+        void checkStmt(Stmt* stmt, SemanticsContext const& context);
 
         void getGenericParams(
             GenericDecl*                        decl,
@@ -1264,6 +1387,10 @@ namespace Slang
         // count the number of parameters required/allowed for a generic
         ParamCounts CountParameters(DeclRef<GenericDecl> genericRef);
 
+        bool TryCheckOverloadCandidateClassNewMatchUp(
+            OverloadResolveContext& context,
+            OverloadCandidate const& candidate);
+
         bool TryCheckOverloadCandidateArity(
             OverloadResolveContext&		context,
             OverloadCandidate const&	candidate);
@@ -1529,6 +1656,9 @@ namespace Slang
         //
 
         void importModuleIntoScope(Scope* scope, ModuleDecl* moduleDecl);
+
+        void suggestCompletionItems(
+            CompletionSuggestions::ScopeKind scopeKind, LookupResult const& lookupResult);
     };
 
     struct SemanticsExprVisitor
@@ -1536,10 +1666,11 @@ namespace Slang
         , ExprVisitor<SemanticsExprVisitor, Expr*>
     {
     public:
-        SemanticsExprVisitor(SharedSemanticsContext* shared)
-            : SemanticsVisitor(shared)
+        SemanticsExprVisitor(SemanticsContext const& outer)
+            : SemanticsVisitor(outer)
         {}
 
+        Expr* visitIncompleteExpr(IncompleteExpr* expr);
         Expr* visitBoolLiteralExpr(BoolLiteralExpr* expr);
         Expr* visitNullPtrLiteralExpr(NullPtrLiteralExpr* expr);
         Expr* visitIntegerLiteralExpr(IntegerLiteralExpr* expr);
@@ -1564,18 +1695,21 @@ namespace Slang
 
         Expr* visitTypeCastExpr(TypeCastExpr * expr);
 
+        Expr* visitTryExpr(TryExpr* expr);
+
         //
         // Some syntax nodes should not occur in the concrete input syntax,
         // and will only appear *after* checking is complete. We need to
         // deal with this cases here, even if they are no-ops.
         //
 
-    #define CASE(NAME)                                  \
-        Expr* visit##NAME(NAME* expr)            \
-        {                                               \
-            SLANG_DIAGNOSE_UNEXPECTED(getSink(), expr,  \
-                "should not appear in input syntax");   \
-            return expr;                                \
+    #define CASE(NAME)                                                                           \
+        Expr* visit##NAME(NAME* expr)                                                            \
+        {                                                                                        \
+            if (!getShared()->isInLanguageServer())                                              \
+                SLANG_DIAGNOSE_UNEXPECTED(getSink(), expr, "should not appear in input syntax"); \
+            expr->type = m_astBuilder->getErrorType();                                           \
+            return expr;                                                                         \
         }
 
         CASE(DerefExpr)
@@ -1602,6 +1736,8 @@ namespace Slang
         Expr* visitAndTypeExpr(AndTypeExpr* expr);
         Expr* visitModifiedTypeExpr(ModifiedTypeExpr* expr);
 
+        Expr* visitJVPDifferentiateExpr(JVPDifferentiateExpr* expr);
+
             /// Perform semantic checking on a `modifier` that is being applied to the given `type`
         Val* checkTypeModifier(Modifier* modifier, Type* type);
     };
@@ -1610,17 +1746,9 @@ namespace Slang
         : public SemanticsVisitor
         , StmtVisitor<SemanticsStmtVisitor>
     {
-        SemanticsStmtVisitor(SharedSemanticsContext* shared, FunctionDeclBase* parentFunc, OuterStmtInfo* outerStmts)
-            : SemanticsVisitor(shared)
-            , m_parentFunc(parentFunc)
-            , m_outerStmts(outerStmts)
+        SemanticsStmtVisitor(SemanticsContext const& outer)
+            : SemanticsVisitor(outer)
         {}
-
-            /// The parent function (if any) that surrounds the statement being checked.
-        FunctionDeclBase* m_parentFunc = nullptr;
-
-            /// The linked list of lexically surrounding statements.
-        OuterStmtInfo* m_outerStmts = nullptr;
 
         FunctionDeclBase* getParentFunc() { return m_parentFunc; }
 
@@ -1671,13 +1799,13 @@ namespace Slang
     struct SemanticsDeclVisitorBase
         : public SemanticsVisitor
     {
-        SemanticsDeclVisitorBase(SharedSemanticsContext* shared)
-            : SemanticsVisitor(shared)
+        SemanticsDeclVisitorBase(SemanticsContext const& outer)
+            : SemanticsVisitor(outer)
         {}
 
         void checkBodyStmt(Stmt* stmt, FunctionDeclBase* parentDecl)
         {
-            checkStmt(stmt, parentDecl, nullptr);
+            checkStmt(stmt, withParentFunc(parentDecl));
         }
 
         void checkModule(ModuleDecl* programNode);

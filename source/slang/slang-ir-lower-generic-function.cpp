@@ -58,7 +58,7 @@ namespace Slang
             {
                 if (genericChild == func)
                     continue;
-                if (genericChild->getOp() == kIROp_ReturnVal)
+                if (genericChild->getOp() == kIROp_Return)
                     continue;
                 // Process all generic parameters and local type definitions.
                 auto clonedChild = cloneInst(&cloneEnv, &builder, genericChild);
@@ -152,6 +152,10 @@ namespace Slang
             // Do not lower intrinsic interfaces.
             if (isBuiltin(interfaceType))
                 return interfaceType;
+            // Do not lower COM interfaces.
+            if (isComInterfaceType(interfaceType))
+                return interfaceType;
+
             List<IRInterfaceRequirementEntry*> newEntries;
 
             IRBuilder builder(sharedContext->sharedBuilderStorage);
@@ -260,7 +264,8 @@ namespace Slang
             // If the requirement is a function, interfaceRequirementVal will be the lowered function type.
             // If the requirement is an associatedtype, interfaceRequirementVal will be Ptr<RTTIObject>.
             IRInst* interfaceRequirementVal = nullptr;
-            auto witnessTableType = cast<IRWitnessTableType>(lookupInst->getWitnessTable()->getDataType());
+            auto witnessTableType = as<IRWitnessTableType>(lookupInst->getWitnessTable()->getDataType());
+            if (!witnessTableType) return;
             auto interfaceType = maybeLowerInterfaceType(cast<IRInterfaceType>(witnessTableType->getConformanceType()));
             interfaceRequirementVal = sharedContext->findInterfaceRequirementVal(interfaceType, lookupInst->getRequirementKey());
             lookupInst->setFullType((IRType*)interfaceRequirementVal);
@@ -310,6 +315,7 @@ namespace Slang
             }
             // Update hash keys of globalNumberingMap, since the types are modified.
             sharedContext->sharedBuilderStorage.deduplicateAndRebuildGlobalNumberingMap();
+            sharedContext->mapInterfaceRequirementKeyValue.Clear();
         }
 
         void processModule()

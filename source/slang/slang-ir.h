@@ -786,7 +786,13 @@ struct IRBoolType : IRBasicType
     IR_LEAF_ISA(BoolType)
 };
 
-SIMPLE_IR_TYPE(StringType, Type)
+struct IRStringTypeBase : IRType
+{
+    IR_PARENT_ISA(StringTypeBase)
+};
+
+SIMPLE_IR_TYPE(StringType, StringTypeBase)
+SIMPLE_IR_TYPE(NativeStringType, StringTypeBase)
 
 SIMPLE_IR_TYPE(DynamicType, Type)
 
@@ -890,6 +896,11 @@ struct IRPtrLit : IRConstant
     IR_LEAF_ISA(PtrLit);
 
     void* getValue() { return value.ptrVal; }
+};
+
+struct IRVoidLit : IRConstant
+{
+    IR_LEAF_ISA(VoidLit);
 };
 
 // A instruction that ends a basic block (usually because of control flow)
@@ -1215,6 +1226,7 @@ SIMPLE_IR_TYPE(UnsizedArrayType, ArrayTypeBase)
 SIMPLE_IR_PARENT_TYPE(Rate, Type)
 SIMPLE_IR_TYPE(ConstExprRate, Rate)
 SIMPLE_IR_TYPE(GroupSharedRate, Rate)
+SIMPLE_IR_TYPE(ActualGlobalRate, Rate)
 
 struct IRRateQualifiedType : IRType
 {
@@ -1260,6 +1272,13 @@ struct IRMatrixType : IRType
     IR_LEAF_ISA(MatrixType)
 };
 
+struct IRSPIRVLiteralType : IRType
+{
+    IR_LEAF_ISA(SPIRVLiteralType)
+
+    IRType* getValueType() { return static_cast<IRType*>(getOperand(0)); }
+};
+
 struct IRPtrTypeBase : IRType
 {
     IRType* getValueType() { return (IRType*)getOperand(0); }
@@ -1279,6 +1298,9 @@ SIMPLE_IR_TYPE(RefType, PtrTypeBase)
 SIMPLE_IR_PARENT_TYPE(OutTypeBase, PtrTypeBase)
 SIMPLE_IR_TYPE(OutType, OutTypeBase)
 SIMPLE_IR_TYPE(InOutType, OutTypeBase)
+
+SIMPLE_IR_TYPE(ComPtrType, Type)
+SIMPLE_IR_TYPE(NativePtrType, Type)
 
 struct IRPseudoPtrType : public IRPtrTypeBase
 {
@@ -1386,6 +1408,13 @@ struct IRStructType : IRType
     IR_LEAF_ISA(StructType)
 };
 
+struct IRClassType : IRType
+{
+    IRInstList<IRStructField> getFields() { return IRInstList<IRStructField>(getChildren()); }
+
+    IR_LEAF_ISA(ClassType)
+};
+
 struct IRAssociatedType : IRType
 {
     IR_LEAF_ISA(AssociatedType)
@@ -1441,6 +1470,15 @@ struct IRAttributedType : IRType
 struct IRTupleType : IRType
 {
     IR_LEAF_ISA(TupleType)
+};
+
+/// Represents an `Result<T,E>`, used by functions that throws error codes.
+struct IRResultType : IRType
+{
+    IR_LEAF_ISA(ResultType)
+
+    IRType* getValueType() { return (IRType*)getOperand(0); }
+    IRType* getErrorType() { return (IRType*)getOperand(1); }
 };
 
 struct IRTypeType : IRType
@@ -1698,6 +1736,10 @@ private:
     MemoryArena m_memoryArena;
 };
 
+struct IRSpecializationDictionaryItem : public IRInst
+{
+    IR_LEAF_ISA(SpecializationDictionaryItem)
+};
 
 struct IRDumpOptions
 {
@@ -1751,12 +1793,6 @@ void dumpIR(IRModule* module, const IRDumpOptions& options, char const* label, S
 
     /// True if the op type can be handled 'nominally' meaning that pointer identity is applicable. 
 bool isNominalOp(IROp op);
-
-    // True if ptrType is a pointer type to elementType
-bool isPointerOfType(IRInst* ptrType, IRInst* elementType);
-
-    // True if ptrType is a pointer type to a type of opCode
-bool isPointerOfType(IRInst* ptrType, IROp opCode);
 
     // True if the IR inst represents a builtin object (e.g. __BuiltinFloatingPointType).
 bool isBuiltin(IRInst* inst);

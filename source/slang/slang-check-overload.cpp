@@ -60,6 +60,40 @@ namespace Slang
         return counts;
     }
 
+    bool SemanticsVisitor::TryCheckOverloadCandidateClassNewMatchUp(OverloadResolveContext& context, OverloadCandidate const& candidate)
+    {
+        // Check that a constructor call to a class type must be in a `new` expr, and a `new` expr
+        // is only used to construct a class.
+        bool isClassType = false;
+        bool isNewExpr = false;
+        if (auto ctorDeclRef = candidate.item.declRef.as<ConstructorDecl>())
+        {
+            if (auto resultType = as<DeclRefType>(candidate.resultType))
+            {
+                if (resultType->declRef.as<ClassDecl>())
+                {
+                    isClassType = true;
+                }
+            }
+        }
+        if (as<NewExpr>(context.originalExpr))
+        {
+            isNewExpr = true;
+        }
+
+        if (isNewExpr && !isClassType)
+        {
+            getSink()->diagnose(context.originalExpr, Diagnostics::newCanOnlyBeUsedToInitializeAClass);
+            return false;
+        }
+        if (!isNewExpr && isClassType)
+        {
+            getSink()->diagnose(context.originalExpr, Diagnostics::classCanOnlyBeInitializedWithNew);
+            return false;
+        }
+        return true;
+    }
+
     bool SemanticsVisitor::TryCheckOverloadCandidateArity(
         OverloadResolveContext&		context,
         OverloadCandidate const&	candidate)
@@ -74,6 +108,14 @@ namespace Slang
 
         case OverloadCandidate::Flavor::Generic:
             paramCounts = CountParameters(candidate.item.declRef.as<GenericDecl>());
+            break;
+
+        case OverloadCandidate::Flavor::Expr:
+            {
+                auto paramCount = candidate.funcType->getParamCount();
+                paramCounts.allowed = paramCount;
+                paramCounts.required = paramCount;
+            }
             break;
 
         default:
@@ -312,11 +354,34 @@ namespace Slang
     {
         Index argCount = context.getArgCount();
 
-        List<DeclRef<ParamDecl>> params;
+        List<Type*> paramTypes;
+//        List<DeclRef<ParamDecl>> params;
         switch (candidate.flavor)
         {
         case OverloadCandidate::Flavor::Func:
-            params = getParameters(candidate.item.declRef.as<CallableDecl>()).toArray();
+            for (auto param : getParameters(candidate.item.declRef.as<CallableDecl>()))
+            {
+                auto paramType = getType(m_astBuilder, param);
+                paramTypes.add(paramType);
+            }
+            break;
+
+        case OverloadCandidate::Flavor::Expr:
+            {
+                auto funcType = candidate.funcType;
+                Count paramCount = funcType->getParamCount();
+                for (Index i = 0; i < paramCount; ++i)
+                {
+                    auto paramType = funcType->getParamType(i);
+
+                    if(auto paramDirectionType = as<ParamDirectionType>(paramType))
+                    {
+                        paramType = paramDirectionType->getValueType();
+                    }
+
+                    paramTypes.add(paramType);
+                }
+            }
             break;
 
         case OverloadCandidate::Flavor::Generic:
@@ -329,13 +394,13 @@ namespace Slang
 
         // Note(tfoley): We might have fewer arguments than parameters in the
         // case where one or more parameters had defaults.
-        SLANG_RELEASE_ASSERT(argCount <= params.getCount());
+        SLANG_RELEASE_ASSERT(argCount <= paramTypes.getCount());
 
         for (Index ii = 0; ii < argCount; ++ii)
         {
             auto& arg = context.getArg(ii);
             auto argType = context.getArgType(ii);
-            auto param = params[ii];
+            auto paramType = paramTypes[ii];
 
             if (context.mode == OverloadResolveContext::Mode::JustTrying)
             {
@@ -343,10 +408,10 @@ namespace Slang
                 if( context.disallowNestedConversions )
                 {
                     // We need an exact match in this case.
-                    if(!getType(m_astBuilder, param)->equals(argType))
+                    if(!paramType->equals(argType))
                         return false;
                 }
-                else if (!canCoerce(getType(m_astBuilder, param), argType, arg, &cost))
+                else if (!canCoerce(paramType, argType, arg, &cost))
                 {
                     return false;
                 }
@@ -354,7 +419,7 @@ namespace Slang
             }
             else
             {
-                arg = coerce(getType(m_astBuilder, param), arg);
+                arg = coerce(paramType, arg);
             }
         }
         return true;
@@ -517,7 +582,8 @@ namespace Slang
         return ConstructDeclRefExpr(
             innerDeclRef,
             base,
-            originalExpr->loc);
+            originalExpr->loc,
+            originalExpr);
     }
 
     Expr* SemanticsVisitor::CompleteOverloadCandidate(
@@ -540,6 +606,9 @@ namespace Slang
 
         context.mode = OverloadResolveContext::Mode::ForReal;
 
+        if (!TryCheckOverloadCandidateClassNewMatchUp(context, candidate))
+            goto error;
+
         if (!TryCheckOverloadCandidateArity(context, candidate))
             goto error;
 
@@ -556,8 +625,25 @@ namespace Slang
             goto error;
 
         {
-            auto baseExpr = ConstructLookupResultExpr(
-                candidate.item, context.baseExpr, context.funcLoc);
+            auto originalAppExpr = as<AppExprBase>(context.originalExpr);
+
+
+            Expr* baseExpr;
+            switch(candidate.flavor)
+            {
+            case OverloadCandidate::Flavor::Func:
+            case OverloadCandidate::Flavor::Generic:
+                baseExpr = ConstructLookupResultExpr(
+                    candidate.item,
+                    context.baseExpr,
+                    context.funcLoc,
+                    originalAppExpr ? originalAppExpr->functionExpr : nullptr);
+                break;
+            case OverloadCandidate::Flavor::Expr:
+            default:
+                baseExpr = nullptr;
+                break;
+            }
 
             switch(candidate.flavor)
             {
@@ -568,12 +654,11 @@ namespace Slang
                     {
                         callExpr = m_astBuilder->create<InvokeExpr>();
                         callExpr->loc = context.loc;
-
                         for(Index aa = 0; aa < context.argCount; ++aa)
                             callExpr->arguments.add(context.getArg(aa));
                     }
 
-
+                    callExpr->originalFunctionExpr = callExpr->functionExpr;
                     callExpr->functionExpr = baseExpr;
                     callExpr->type = QualType(candidate.resultType);
 
@@ -592,6 +677,25 @@ namespace Slang
                     return callExpr;
                 }
 
+                break;
+
+            case OverloadCandidate::Flavor::Expr:
+                {
+                    AppExprBase* callExpr = as<InvokeExpr>(context.originalExpr);
+                    if (!callExpr)
+                    {
+                        callExpr = m_astBuilder->create<InvokeExpr>();
+                        callExpr->loc = context.loc;
+                        for (Index aa = 0; aa < context.argCount; ++aa)
+                            callExpr->arguments.add(context.getArg(aa));
+                    }
+
+                    callExpr->originalFunctionExpr = callExpr->functionExpr;
+                    callExpr->type = QualType(candidate.resultType);
+
+                    return callExpr;
+
+                }
                 break;
 
             case OverloadCandidate::Flavor::Generic:
@@ -992,8 +1096,12 @@ namespace Slang
         FuncType*        funcType,
         OverloadResolveContext& context)
     {
-        SLANG_UNUSED(funcType);
-        getSink()->diagnose(context.loc, Diagnostics::unimplemented, "call on expression of function type");
+        OverloadCandidate candidate;
+        candidate.flavor = OverloadCandidate::Flavor::Expr;
+        candidate.funcType = funcType;
+        candidate.resultType = funcType->getResultType();
+
+        AddOverloadCandidate(context, candidate);
     }
 
     void SemanticsVisitor::AddCtorOverloadCandidate(

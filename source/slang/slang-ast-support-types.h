@@ -517,7 +517,10 @@ namespace Slang
             return cf(astBuilder);
         }
 
-        SLANG_FORCE_INLINE bool isSubClassOfImpl(SyntaxClassBase const& super) const { return classInfo->isSubClassOf(*super.classInfo); }
+        SLANG_FORCE_INLINE bool isSubClassOfImpl(SyntaxClassBase const& super) const
+        {
+            return classInfo ? classInfo->isSubClassOf(*super.classInfo) : false;
+        }
 
         ReflectClassInfo const* classInfo = nullptr;
     };
@@ -761,6 +764,7 @@ namespace Slang
 
         // Convenience accessors for common properties of declarations
         Name* getName() const;
+        SourceLoc getNameLoc() const;
         SourceLoc getLoc() const;
         DeclRefBase getParent() const;
 
@@ -1116,6 +1120,7 @@ namespace Slang
     {
         None = 0,
         IgnoreBaseInterfaces = 1 << 0,
+        Completion = 1 << 1, ///< Lookup all applicable decls for code completion suggestions
     };
 
     class SerialRefObject;
@@ -1319,26 +1324,26 @@ namespace Slang
         {
             return items.getCount() > 1 ? items[0].declRef.getName() : item.declRef.getName();
         }
-        LookupResultItem* begin()
+        LookupResultItem* begin() const
         {
             if (isValid())
             {
                 if (isOverloaded())
-                    return items.begin();
+                    return const_cast<LookupResultItem*>(items.begin());
                 else
-                    return &item;
+                    return const_cast<LookupResultItem*>(&item);
             }
             else
                 return nullptr;
         }
-        LookupResultItem* end()
+        LookupResultItem* end() const
         {
             if (isValid())
             {
                 if (isOverloaded())
-                    return items.end();
+                    return const_cast<LookupResultItem*>(items.end());
                 else
-                    return &item + 1;
+                    return const_cast<LookupResultItem*>(&item + 1);
             }
             else
                 return nullptr;
@@ -1355,6 +1360,8 @@ namespace Slang
 
         LookupMask          mask        = LookupMask::Default;
         LookupOptions       options     = LookupOptions::None;
+
+        bool isCompletionRequest() const { return ((int)options & (int)LookupOptions::Completion) != 0; }
     };
 
     struct WitnessTable;
@@ -1468,6 +1475,15 @@ namespace Slang
     struct CandidateExtensionList : RefObject
     {
         List<ExtensionDecl*> candidateExtensions;
+    };
+
+        /// Represents the "direction" that a parameter is being passed (e.g., `in` or `out`
+    enum ParameterDirection
+    {
+        kParameterDirection_In,     ///< Copy in
+        kParameterDirection_Out,    ///< Copy out
+        kParameterDirection_InOut,  ///< Copy in, copy out
+        kParameterDirection_Ref,    ///< By-reference
     };
 
 } // namespace Slang

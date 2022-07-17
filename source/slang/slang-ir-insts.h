@@ -177,6 +177,15 @@ struct IRAnyValueSizeDecoration : IRDecoration
     }
 };
 
+struct IRComInterfaceDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_ComInterfaceDecoration
+    };
+    IR_LEAF_ISA(ComInterfaceDecoration)
+};
+
 /// A decoration on `IRParam`s that represent generic parameters,
 /// marking the interface type that the generic parameter conforms to.
 /// A generic parameter can have more than one `IRTypeConstraintDecoration`s
@@ -268,6 +277,7 @@ IR_SIMPLE_DECORATION(EarlyDepthStencilDecoration)
 IR_SIMPLE_DECORATION(GloballyCoherentDecoration)
 IR_SIMPLE_DECORATION(PreciseDecoration)
 IR_SIMPLE_DECORATION(PublicDecoration)
+IR_SIMPLE_DECORATION(HLSLExportDecoration)
 IR_SIMPLE_DECORATION(KeepAliveDecoration)
 IR_SIMPLE_DECORATION(RequiresNVAPIDecoration)
 IR_SIMPLE_DECORATION(NoInlineDecoration)
@@ -505,6 +515,33 @@ struct IRSequentialIDDecoration : IRDecoration
     IRIntegerValue getSequentialID() { return getSequentialIDOperand()->getValue(); }
 };
 
+struct IRJVPDerivativeReferenceDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_JVPDerivativeReferenceDecoration
+    };
+    IR_LEAF_ISA(JVPDerivativeReferenceDecoration)
+
+    IRFunc* getJVPFunc() { return as<IRFunc>(getOperand(0)); }
+};
+
+
+// An instruction that replaces the function symbol
+// with it's derivative function.
+struct IRJVPDifferentiate : IRInst
+{
+    enum
+    {
+        kOp = kIROp_JVPDifferentiate
+    };
+    // The base function for the call.
+    IRUse base;
+    IRInst* getBaseFn() { return getOperand(0); }
+
+    IR_LEAF_ISA(JVPDifferentiate)
+};
+
 // An instruction that specializes another IR value
 // (representing a generic) to a particular set of generic arguments 
 // (instructions representing types, witness tables, etc.)
@@ -677,6 +714,14 @@ struct IRVarOffsetAttr : public IRLayoutResourceInfoAttr
             return UInt(getIntVal(spaceInst));
         return 0;
     }
+};
+
+    /// An attribute that specifies the error type a function is throwing
+struct IRFuncThrowTypeAttr : IRAttr
+{
+    IR_LEAF_ISA(FuncThrowTypeAttr)
+
+    IRType* getErrorType() { return (IRType*)getOperand(0); }
 };
 
     /// An attribute that specifies size information for a single resource kind.
@@ -1380,6 +1425,18 @@ struct IRGetElementPtr : IRInst
     IRInst* getIndex() { return getOperand(1); }
 };
 
+struct IRGetNativePtr : IRInst
+{
+    IR_LEAF_ISA(GetNativePtr);
+    IRInst* getElementType() { return getOperand(0); }
+};
+
+struct IRGetManagedPtrWriteRef : IRInst
+{
+    IR_LEAF_ISA(GetManagedPtrWriteRef);
+    IRInst* getPtrToManagedPtr() { return getOperand(0); }
+};
+
 struct IRGetAddress : IRInst
 {
     IR_LEAF_ISA(getAddr);
@@ -1409,17 +1466,11 @@ struct IRImageStore : IRInst
 // Terminators
 
 struct IRReturn : IRTerminatorInst
-{};
-
-struct IRReturnVal : IRReturn
 {
-    IRUse val;
+    IR_LEAF_ISA(Return);
 
-    IRInst* getVal() { return val.get(); }
+    IRInst* getVal() { return getOperand(0); }
 };
-
-struct IRReturnVoid : IRReturn
-{};
 
 struct IRDiscard : IRTerminatorInst
 {};
@@ -1535,6 +1586,25 @@ struct IRSwitch : IRTerminatorInst
     UInt getCaseCount() { return (getOperandCount() - 3) / 2; }
     IRInst* getCaseValue(UInt index) { return            getOperand(3 + index*2 + 0); }
     IRBlock* getCaseLabel(UInt index) { return (IRBlock*) getOperand(3 + index*2 + 1); }
+};
+
+struct IRThrow : IRTerminatorInst
+{
+    IR_LEAF_ISA(Throw);
+
+    IRInst* getValue() { return getOperand(0); }
+};
+
+struct IRTryCall : IRTerminatorInst
+{
+    IR_LEAF_ISA(TryCall);
+
+    IRBlock* getSuccessBlock() { return cast<IRBlock>(getOperand(0)); }
+    IRBlock* getFailureBlock() { return cast<IRBlock>(getOperand(1)); }
+    IRInst* getCallee() { return getOperand(2); }
+    UInt getArgCount() { return getOperandCount() - 3; }
+    IRUse* getArgs() { return getOperands() + 3; }
+    IRInst* getArg(UInt index) { return getOperand(index + 3); }
 };
 
 struct IRSwizzle : IRInst
@@ -1748,6 +1818,46 @@ struct IRGetTupleElement : IRInst
     IRInst* getElementIndex() { return getOperand(1); }
 };
 
+// Constructs an `Result<T,E>` value from an error code.
+struct IRMakeResultError : IRInst
+{
+    IR_LEAF_ISA(MakeResultError)
+
+    IRInst* getErrorValue() { return getOperand(0); }
+};
+
+// Constructs an `Result<T,E>` value from an valid value.
+struct IRMakeResultValue : IRInst
+{
+    IR_LEAF_ISA(MakeResultValue)
+
+    IRInst* getValue() { return getOperand(0); }
+};
+
+// Determines if a `Result` value represents an error.
+struct IRIsResultError : IRInst
+{
+    IR_LEAF_ISA(IsResultError)
+
+    IRInst* getResultOperand() { return getOperand(0); }
+};
+
+// Extract the value from a `Result`.
+struct IRGetResultValue : IRInst
+{
+    IR_LEAF_ISA(GetResultValue)
+
+    IRInst* getResultOperand() { return getOperand(0); }
+};
+
+// Extract the error code from a `Result`.
+struct IRGetResultError : IRInst
+{
+    IR_LEAF_ISA(GetResultError)
+
+    IRInst* getResultOperand() { return getOperand(0); }
+};
+
     /// An instruction that packs a concrete value into an existential-type "box"
 struct IRMakeExistential : IRInst
 {
@@ -1807,6 +1917,43 @@ struct IRExtractExistentialWitnessTable : IRInst
     IR_LEAF_ISA(ExtractExistentialWitnessTable);
 };
 
+/* Base class for instructions that track liveness */
+struct IRLiveRangeMarker : IRInst
+{
+    IR_PARENT_ISA(LiveRangeMarker)
+
+    // TODO(JS): It might be useful to track how many bytes are live in the item referenced. 
+    // It's not entirely clear how that will work across different targets, or even what such a 
+    // size means on some targets.
+    // 
+    // Here we assume the size is the size of the type being referenced (whatever that means on a target)
+    //
+    // Potentially we could have a count, for defining (say) a range of an array. It's not clear this is 
+    // needed, so we just have the item referenced.
+
+        /// The referenced item whose liveness starts after this instruction
+    IRInst* getReferenced() { return getOperand(0); }
+};
+
+/// Identifies then the item references starts being live.
+struct IRLiveRangeStart : IRLiveRangeMarker
+{
+    IR_LEAF_ISA(LiveRangeStart);        
+};
+
+/// Demarks where the referenced item is no longer live, optimimally (although not
+/// necessarily) at the previous instruction. 
+/// 
+/// There *can* be acceses to the referenced item after the end, if those accesses
+/// can never be seen. For example if there is a store, without any subsequent loads, 
+/// the store will never be seen (by a load) and so can be ignored.
+///
+/// In general there can be one or more 'ends' for every start.
+struct IRLiveRangeEnd : IRLiveRangeMarker
+{
+    IR_LEAF_ISA(LiveRangeEnd);
+};
+
 // Description of an instruction to be used for global value numbering
 struct IRInstKey
 {
@@ -1861,11 +2008,16 @@ public:
     // keys are modified (thus its hash code is changed).
     void deduplicateAndRebuildGlobalNumberingMap();
 
+    // Replaces all uses of oldInst with newInst, and ensures the global numbering map is valid after the replacement.
+    void replaceGlobalInst(IRInst* oldInst, IRInst* newInst);
+
     typedef Dictionary<IRInstKey, IRInst*> GlobalValueNumberingMap;
     typedef Dictionary<IRConstantKey, IRConstant*> ConstantMap;
 
     GlobalValueNumberingMap& getGlobalValueNumberingMap() { return m_globalValueNumberingMap; }
     ConstantMap& getConstantMap() { return m_constantMap; }
+
+    bool isGloballyNumberedInst(IRInst* inst);
 
 private:
     // The module that will own all of the IR
@@ -2023,6 +2175,7 @@ public:
     IRInst* getFloatValue(IRType* type, IRFloatingPointValue value);
     IRStringLit* getStringValue(const UnownedStringSlice& slice);
     IRPtrLit* getPtrValue(void* value);
+    IRVoidLit* getVoidValue();
     IRInst* getCapabilityValue(CapabilitySet const& caps);
 
     IRBasicType* getBasicType(BaseType baseType);
@@ -2033,6 +2186,8 @@ public:
     IRBasicType* getUInt64Type();
     IRBasicType* getCharType();
     IRStringType* getStringType();
+    IRNativeStringType* getNativeStringType();
+    IRNativePtrType* getNativePtrType(IRType* valueType);
 
     IRType* getCapabilitySetType();
 
@@ -2056,6 +2211,8 @@ public:
     IRTupleType* getTupleType(IRType* type0, IRType* type1, IRType* type2);
     IRTupleType* getTupleType(IRType* type0, IRType* type1, IRType* type2, IRType* type3);
 
+    IRResultType* getResultType(IRType* valueType, IRType* errorType);
+
     IRBasicBlockType*   getBasicBlockType();
     IRWitnessTableType* getWitnessTableType(IRType* baseType);
     IRWitnessTableIDType* getWitnessTableIDType(IRType* baseType);
@@ -2071,6 +2228,11 @@ public:
     IRRefType*  getRefType(IRType* valueType);
     IRPtrTypeBase*  getPtrType(IROp op, IRType* valueType);
     IRPtrType* getPtrType(IROp op, IRType* valueType, IRIntegerValue addressSpace);
+
+    IRComPtrType* getComPtrType(IRType* valueType);
+
+        /// Get a 'SPIRV literal' 
+    IRSPIRVLiteralType* getSPIRVLiteralType(IRType* type);
 
     IRArrayTypeBase* getArrayTypeBase(
         IROp    op,
@@ -2099,6 +2261,9 @@ public:
         IRType*         resultType);
 
     IRFuncType* getFuncType(
+        UInt paramCount, IRType* const* paramTypes, IRType* resultType, IRAttr* attribute);
+
+    IRFuncType* getFuncType(
         List<IRType*> const&    paramTypes,
         IRType*                 resultType)
     {
@@ -2110,6 +2275,7 @@ public:
 
     IRConstExprRate* getConstExprRate();
     IRGroupSharedRate* getGroupSharedRate();
+    IRActualGlobalRate* getActualGlobalRate();
 
     IRRateQualifiedType* getRateQualifiedType(
         IRRate* rate,
@@ -2167,6 +2333,12 @@ public:
         return getAttributedType(baseType, attributes.getCount(), attributes.getBuffer());
     }
 
+        /// Emit an LiveRangeStart instruction indicating the referenced item is live following this instruction
+    IRLiveRangeStart* emitLiveRangeStart(IRInst* referenced);
+
+        /// Emit a LiveRangeEnd instruction indicating the referenced item is no longer live when this instruction is reached.
+    IRLiveRangeEnd* emitLiveRangeEnd(IRInst* referenced);
+
     // Set the data type of an instruction, while preserving
     // its rate, if any.
     void setDataType(IRInst* inst, IRType* dataType);
@@ -2186,6 +2358,8 @@ public:
         /// Given an existential value, extract the witness table showing how the value conforms to the existential type.
     IRInst* emitExtractExistentialWitnessTable(
         IRInst* existentialValue);
+
+    IRInst* emitJVPDifferentiateInst(IRType* type, IRInst* baseFn);
 
     IRInst* emitSpecializeInst(
         IRType*         type,
@@ -2219,6 +2393,14 @@ public:
     {
         return emitCallInst(type, func, args.getCount(), args.getBuffer());
     }
+
+    IRInst* emitTryCallInst(
+        IRType* type,
+        IRBlock* successBlock,
+        IRBlock* failureBlock,
+        IRInst* func,
+        UInt argCount,
+        IRInst* const* args);
 
     IRInst* createIntrinsicInst(
         IRType*         type,
@@ -2261,7 +2443,17 @@ public:
         return emitMakeTuple(SLANG_COUNT_OF(args), args);
     }
 
+    IRInst* emitMakeString(IRInst* nativeStr);
+
+    IRInst* emitGetNativeString(IRInst* str);
+
     IRInst* emitGetTupleElement(IRType* type, IRInst* tuple, UInt element);
+
+    IRInst* emitMakeResultError(IRType* resultType, IRInst* errorVal);
+    IRInst* emitMakeResultValue(IRType* resultType, IRInst* val);
+    IRInst* emitIsResultError(IRInst* result);
+    IRInst* emitGetResultError(IRInst* result);
+    IRInst* emitGetResultValue(IRInst* result);
 
     IRInst* emitMakeVector(
         IRType*         type,
@@ -2327,6 +2519,14 @@ public:
         return emitWrapExistential(type, value, slotArgCount, slotArgVals.getBuffer());
     }
 
+    IRInst* emitManagedPtrAttach(IRInst* managedPtrVar, IRInst* value);
+
+    IRInst* emitManagedPtrDetach(IRInst* managedPtrVar);
+
+    IRInst* emitGetNativePtr(IRInst* value);
+
+    IRInst* emitGetManagedPtrWriteRef(IRInst* ptrToManagedPtr);
+
     IRInst* emitGpuForeach(List<IRInst*> args);
 
     IRUndefined* emitUndefined(IRType* type);
@@ -2378,6 +2578,9 @@ public:
     // Create an initially empty `struct` type.
     IRStructType*   createStructType();
 
+    // Create an initially empty `class` type.
+    IRClassType* createClassType();
+
     // Create an empty `interface` type.
     IRInterfaceType* createInterfaceType(UInt operandCount, IRInst* const* operands);
 
@@ -2387,7 +2590,7 @@ public:
     // Create a field nested in a struct type, declaring that
     // the specified field key maps to a field with the specified type.
     IRStructField*  createStructField(
-        IRStructType*   structType,
+        IRType*         aggType,
         IRStructKey*    fieldKey,
         IRType*         fieldType);
 
@@ -2436,6 +2639,8 @@ public:
         IRType* type);
     IRParam* emitParamAtHead(
         IRType* type);
+
+    IRInst* emitAllocObj(IRType* type);
 
     IRVar* emitVar(
         IRType* type);
@@ -2531,6 +2736,8 @@ public:
 
     IRInst* emitReturn();
 
+    IRInst* emitThrow(IRInst* val);
+
     IRInst* emitDiscard();
 
     IRInst* emitUnreachable();
@@ -2538,6 +2745,8 @@ public:
 
     IRInst* emitBranch(
         IRBlock*    block);
+
+   IRInst* emitBranch(IRBlock* block, Int argCount, IRInst*const* args);
 
     IRInst* emitBreak(
         IRBlock*    target);
@@ -2565,6 +2774,16 @@ public:
         IRBlock*    trueBlock,
         IRBlock*    falseBlock,
         IRBlock*    afterBlock);
+
+    // Create basic blocks and insert an `IfElse` inst at current position that jumps into the blocks.
+    // The current insert position is changed to inside `outTrueBlock` after the call.
+    IRInst* emitIfElseWithBlocks(
+        IRInst* val, IRBlock*& outTrueBlock, IRBlock*& outFalseBlock, IRBlock*& outAfterBlock);
+
+    // Create basic blocks and insert an `If` inst at current position that jumps into the blocks.
+    // The current insert position is changed to inside `outTrueBlock` after the call.
+    IRInst* emitIfWithBlocks(
+        IRInst* val, IRBlock*& outTrueBlock, IRBlock*& outAfterBlock);
 
     IRInst* emitLoopTest(
         IRInst*    val,
@@ -2627,7 +2846,13 @@ public:
     IRInst* emitBitNot(IRType* type, IRInst* value);
 
     IRInst* emitAdd(IRType* type, IRInst* left, IRInst* right);
+    IRInst* emitSub(IRType* type, IRInst* left, IRInst* right);
     IRInst* emitMul(IRType* type, IRInst* left, IRInst* right);
+    IRInst* emitDiv(IRType* type, IRInst* numerator, IRInst* denominator);
+    IRInst* emitEql(IRInst* left, IRInst* right);
+    IRInst* emitNeq(IRInst* left, IRInst* right);
+    IRInst* emitLess(IRInst* left, IRInst* right);
+
     IRInst* emitShr(IRType* type, IRInst* op0, IRInst* op1);
     IRInst* emitShl(IRType* type, IRInst* op0, IRInst* op1);
 
@@ -2817,6 +3042,16 @@ public:
         addDecoration(value, kIROp_ExternCppDecoration, getStringValue(mangledName));
     }
 
+    void addJVPDerivativeMarkerDecoration(IRInst* value)
+    {
+        addDecoration(value, kIROp_JVPDerivativeMarkerDecoration);
+    }
+
+    void addJVPDerivativeReferenceDecoration(IRInst* value, IRInst* jvpFn)
+    {
+        addDecoration(value, kIROp_JVPDerivativeReferenceDecoration, jvpFn);
+    }
+
     void addDllImportDecoration(IRInst* value, UnownedStringSlice const& libraryName, UnownedStringSlice const& functionName)
     {
         addDecoration(value, kIROp_DllImportDecoration, getStringValue(libraryName), getStringValue(functionName));
@@ -2837,7 +3072,10 @@ public:
     {
         addDecoration(value, kIROp_PublicDecoration);   
     }
-
+    void addHLSLExportDecoration(IRInst* value)
+    {
+        addDecoration(value, kIROp_HLSLExportDecoration);
+    }
     void addNVAPIMagicDecoration(IRInst* value, UnownedStringSlice const& name)
     {
         addDecoration(value, kIROp_NVAPIMagicDecoration, getStringValue(name));
@@ -2877,6 +3115,11 @@ public:
     void addAnyValueSizeDecoration(IRInst* inst, IRIntegerValue value)
     {
         addDecoration(inst, kIROp_AnyValueSizeDecoration, getIntValue(getIntType(), value));
+    }
+
+    void addComInterfaceDecoration(IRInst* inst)
+    {
+        addDecoration(inst, kIROp_ComInterfaceDecoration);
     }
 
     void addTypeConstraintDecoration(IRInst* inst, IRInst* constraintType)

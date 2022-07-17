@@ -4,7 +4,7 @@ on:
     tags:
     - 'v*' # Push events to matching v*, i.e. v1.0, v20.15.10
 
-name: Upload Release Asset - Windows
+name: Windows Release
 
 jobs:
   build:
@@ -72,6 +72,7 @@ jobs:
           7z a "$binArchive" bin\*\*\gfx.dll
           7z a "$binArchive" bin\*\*\gfx.lib
           7z a "$binArchive" bin\*\*\slangc.exe
+          7z a "$binArchive" bin\*\*\slangd.exe
           7z a "$binArchive" docs\*.md
 
           $srcArchive = "slang-$slangVersion-source.zip"

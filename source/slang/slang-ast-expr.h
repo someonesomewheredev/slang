@@ -7,8 +7,13 @@
 namespace Slang {
 
 // Syntax class definitions for expressions.
-
-// Base class for expressions that will reference declarations
+// 
+    // A placeholder for where an Expr is expected but is missing from source.
+class IncompleteExpr : public Expr
+{
+    SLANG_AST_CLASS(IncompleteExpr)
+};
+    // Base class for expressions that will reference declarations
 class DeclRefExpr: public Expr
 {
     SLANG_ABSTRACT_AST_CLASS(DeclRefExpr)
@@ -19,6 +24,9 @@ class DeclRefExpr: public Expr
 
     // The name of the symbol being referenced
     Name* name = nullptr;
+
+    // The original expr before DeclRef resolution.
+    Expr* originalExpr = nullptr;
 
     SLANG_UNREFLECTED
     // The scope in which to perform lookup
@@ -137,11 +145,45 @@ class AppExprBase : public ExprWithArgsBase
     SLANG_ABSTRACT_AST_CLASS(AppExprBase)
 
     Expr* functionExpr = nullptr;
+
+    // The original function expr before overload resolution.
+    Expr* originalFunctionExpr = nullptr;
+
+    // The source location of `(`, `)`, and `,` that marks the start/end of the application op and
+    // each argument expr. This info is used by language server.
+    List<SourceLoc> argumentDelimeterLocs;
 };
 
 class InvokeExpr: public AppExprBase
 {
     SLANG_AST_CLASS(InvokeExpr)
+};
+
+enum class TryClauseType
+{
+    None,
+    Standard, // Normal `try` clause
+    Optional, // (Not implemented) `try?` clause that returns an optional value.
+    Assert, // (Not implemented) `try!` clause that should always succeed and triggers runtime error if failed.
+};
+
+char const* getTryClauseTypeName(TryClauseType value);
+
+class TryExpr : public Expr
+{
+    SLANG_AST_CLASS(TryExpr)
+
+    Expr* base;
+
+    TryClauseType tryClauseType = TryClauseType::Standard;
+
+    // The scope of this expr.
+    Scope* scope = nullptr;
+};
+
+class NewExpr : public InvokeExpr
+{
+    SLANG_AST_CLASS(NewExpr)
 };
 
 class OperatorExpr: public InvokeExpr
@@ -174,6 +216,7 @@ class MemberExpr: public DeclRefExpr
 {
     SLANG_AST_CLASS(MemberExpr)
     Expr* baseExpression = nullptr;
+    SourceLoc memberOperatorLoc;
 };
 
 // Member looked up on a type, rather than a value
@@ -181,6 +224,7 @@ class StaticMemberExpr: public DeclRefExpr
 {
     SLANG_AST_CLASS(StaticMemberExpr)
     Expr* baseExpression = nullptr;
+    SourceLoc memberOperatorLoc;
 };
 
 struct MatrixCoord
@@ -198,6 +242,7 @@ class MatrixSwizzleExpr : public Expr
     Expr* base = nullptr;
     int elementCount;
     MatrixCoord elementCoords[4];
+    SourceLoc memberOpLoc;
 };
 
 class SwizzleExpr: public Expr
@@ -206,6 +251,7 @@ class SwizzleExpr: public Expr
     Expr* base = nullptr;
     int elementCount;
     int elementIndices[4];
+    SourceLoc memberOpLoc;
 };
 
 // A dereference of a pointer or pointer-like type
@@ -326,6 +372,15 @@ class ExtractExistentialValueExpr: public Expr
 {
     SLANG_AST_CLASS(ExtractExistentialValueExpr)
     DeclRef<VarDeclBase> declRef;
+};
+
+    /// An expression of the form `__jvp(fn)` to access the 
+    /// forward-mode derivative version of the function `fn`
+    ///
+class JVPDifferentiateExpr: public Expr
+{
+    SLANG_AST_CLASS(JVPDifferentiateExpr)
+    Expr* baseFunction;
 };
 
     /// A type expression of the form `__TaggedUnion(A, ...)`.

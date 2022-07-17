@@ -20,6 +20,7 @@ class PublicModifier : public Modifier { SLANG_AST_CLASS(PublicModifier)};
 class RequireModifier : public Modifier { SLANG_AST_CLASS(RequireModifier)};
 class ParamModifier : public Modifier { SLANG_AST_CLASS(ParamModifier)};
 class ExternModifier : public Modifier { SLANG_AST_CLASS(ExternModifier)};
+class HLSLExportModifier : public Modifier { SLANG_AST_CLASS(HLSLExportModifier) };
 class InputModifier : public Modifier { SLANG_AST_CLASS(InputModifier)};
 class TransparentModifier : public Modifier { SLANG_AST_CLASS(TransparentModifier)};
 class FromStdLibModifier : public Modifier { SLANG_AST_CLASS(FromStdLibModifier)};
@@ -29,6 +30,11 @@ class ExportedModifier : public Modifier { SLANG_AST_CLASS(ExportedModifier)};
 class ConstExprModifier : public Modifier { SLANG_AST_CLASS(ConstExprModifier)};
 class GloballyCoherentModifier : public Modifier { SLANG_AST_CLASS(GloballyCoherentModifier)};
 class ExternCppModifier : public Modifier { SLANG_AST_CLASS(ExternCppModifier)};
+class JVPDerivativeModifier : public Modifier { SLANG_AST_CLASS(JVPDerivativeModifier)};
+
+// An 'ActualGlobal' is a global that is output as a normal global in CPU code. 
+// Globals in HLSL/Slang are constant state passed into kernel execution 
+class ActualGlobalModifier : public Modifier { SLANG_AST_CLASS(ActualGlobalModifier)};
 
     /// A modifier that indicates an `InheritanceDecl` should be ignored during name lookup (and related checks).
 class IgnoreForLookupModifier : public Modifier { SLANG_AST_CLASS(IgnoreForLookupModifier) };
@@ -670,6 +676,11 @@ class GLSLIndexAttribute : public GLSLSimpleIntegerLayoutAttribute
     SLANG_AST_CLASS(GLSLIndexAttribute)
 };
 
+// [[vk_spirv_instruction]]
+class SPIRVInstructionOpAttribute : public Attribute
+{
+    SLANG_AST_CLASS(SPIRVInstructionOpAttribute)
+};
 
 // TODO: for attributes that take arguments, the syntax node
 // classes should provide accessors for the values of those arguments.
@@ -931,11 +942,26 @@ class DllImportAttribute : public Attribute
     String modulePath;
 };
 
+    /// An attribute that marks an interface type as a COM interface declaration.
+class ComInterfaceAttribute : public Attribute
+{
+    SLANG_AST_CLASS(ComInterfaceAttribute)
+};
+
     /// A `[__requiresNVAPI]` attribute indicates that the declaration being modifed
     /// requires NVAPI operations for its implementation on D3D.
 class RequiresNVAPIAttribute : public Attribute
 {
     SLANG_AST_CLASS(RequiresNVAPIAttribute)
+};
+
+    /// The `[__custom_jvp(function)]` attribute specifies a custom function that should
+    /// be used as the derivative for the decorated function.
+class CustomJVPAttribute : public Attribute 
+{
+    SLANG_AST_CLASS(CustomJVPAttribute)
+
+    DeclRefExpr* funcDeclRef;
 };
 
     /// Indicates that the modified declaration is one of the "magic" declarations
@@ -1034,5 +1060,7 @@ class SNormModifier : public ResourceElementFormatModifier
 {
     SLANG_AST_CLASS(SNormModifier)
 };
+
+
 
 } // namespace Slang

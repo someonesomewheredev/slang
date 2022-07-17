@@ -261,9 +261,6 @@ public:
     UInt getBindingOffset(EmitVarChain* chain, LayoutResourceKind kind);
     UInt getBindingSpace(EmitVarChain* chain, LayoutResourceKind kind);
 
-        /// Emit directives to control overall layout computation for the emitted code.
-    void emitLayoutDirectives(TargetRequest* targetReq);
-
         // Utility code for generating unique IDs as needed
         // during the emit process (e.g., for declarations
         // that didn't originally have names, but now need to).
@@ -302,12 +299,16 @@ public:
     // to the new name with the arguments of the old operation.
     static bool isOrdinaryName(const UnownedStringSlice& name);
 
+    void emitComInterfaceCallExpr(IRCall* inst, EmitOpInfo const& inOuterPrec);
+
     void emitIntrinsicCallExpr(
         IRCall*                         inst,
         IRTargetIntrinsicDecoration*    targetIntrinsic,
         EmitOpInfo const&               inOuterPrec);
 
     void emitCallExpr(IRCall* inst, EmitOpInfo outerPrec);
+
+    void emitLiveness(IRInst* inst) { emitLivenessImpl(inst); }
 
     void emitInstExpr(IRInst* inst, EmitOpInfo const& inOuterPrec);
     void defaultEmitInstExpr(IRInst* inst, EmitOpInfo const& inOuterPrec);
@@ -319,13 +320,6 @@ public:
 
     void emitLayoutSemantics(IRInst* inst, char const* uniformSemanticSpelling = "register");
 
-        // When we are about to traverse an edge from one block to another,
-        // we need to emit the assignments that conceptually occur "along"
-        // the edge. In traditional SSA these are the phi nodes in the
-        // target block, while in our representation these use the arguments
-        // to the branch instruction to fill in the parameters of the target.
-    void emitPhiVarAssignments(UInt argCount, IRUse* args, IRBlock* targetBlock);
-
         /// Emit high-level language statements from a structured region.
     void emitRegion(Region* inRegion);
 
@@ -336,8 +330,6 @@ public:
     bool isDefinition(IRFunc* func);
 
     void emitEntryPointAttributes(IRFunc* irFunc, IREntryPointDecoration* entryPointDecor);
-
-    void emitPhiVarDecls(IRFunc* func);
 
         /// Emit high-level statements for the body of a function.
     void emitFunctionBody(IRGlobalValueWithCode* code);
@@ -358,9 +350,11 @@ public:
     bool isTargetIntrinsic(IRFunc* func);
 
     void emitFunc(IRFunc* func);
-    void emitFuncDecorations(IRFunc* func);
+    void emitFuncDecorations(IRFunc* func) { emitFuncDecorationsImpl(func); }
 
     void emitStruct(IRStructType* structType);
+    void emitClass(IRClassType* structType);
+
 
 
         /// Emit type attributes that should appear after, e.g., a `struct` keyword
@@ -403,17 +397,15 @@ public:
 
     void executeEmitActions(List<EmitAction> const& actions);
 
+        // Emits front matter, that occurs before the prelude
+        // Doesn't emit generated function/types that's handled by emitPreModule
+    void emitFrontMatter(TargetRequest* targetReq) { emitFrontMatterImpl(targetReq); }
+
+    void emitPreModule() { emitPreModuleImpl(); }
+
     void emitModule(IRModule* module, DiagnosticSink* sink)
         { m_irModule = module; emitModuleImpl(module, sink); }
 
-        /// Emit any preprocessor directives that should come *before* the prelude code
-        ///
-        /// These are directives that are intended to customize some aspect(s) of the
-        /// prelude's behavior.
-        ///
-    void emitPreludeDirectives() { emitPreludeDirectivesImpl(); }
-
-    void emitPreprocessorDirectives() { emitPreprocessorDirectivesImpl(); }
     void emitSimpleType(IRType* type);
 
     void emitVectorTypeName(IRType* elementType, IRIntegerValue elementCount) { emitVectorTypeNameImpl(elementType, elementCount); }
@@ -443,9 +435,14 @@ public:
 
     virtual void emitImageFormatModifierImpl(IRInst* varDecl, IRType* varType) { SLANG_UNUSED(varDecl); SLANG_UNUSED(varType); }
     virtual void emitLayoutQualifiersImpl(IRVarLayout* layout) { SLANG_UNUSED(layout); }
-    virtual void emitPreludeDirectivesImpl() {}
-    virtual void emitPreprocessorDirectivesImpl() {}
-    virtual void emitLayoutDirectivesImpl(TargetRequest* targetReq) { SLANG_UNUSED(targetReq); }
+
+        /// Emit front matter inserting prelude where appropriate
+    virtual void emitFrontMatterImpl(TargetRequest* targetReq);
+        /// Emit any declarations, and other material that is needed before the modules contents
+        /// For example on targets that don't have built in vector/matrix support, this is where
+        /// the appropriate generated declarations occur.
+    virtual void emitPreModuleImpl() {}
+
     virtual void emitRateQualifiersImpl(IRRate* rate) { SLANG_UNUSED(rate); }
     virtual void emitSemanticsImpl(IRInst* inst) { SLANG_UNUSED(inst);  }
     virtual void emitSimpleFuncParamImpl(IRParam* param);
@@ -465,6 +462,9 @@ public:
     virtual void emitFunctionPreambleImpl(IRInst* inst) { SLANG_UNUSED(inst); }
     virtual void emitLoopControlDecorationImpl(IRLoopControlDecoration* decl) { SLANG_UNUSED(decl); }
     virtual void emitFuncDecorationImpl(IRDecoration* decoration) { SLANG_UNUSED(decoration); }
+    virtual void emitLivenessImpl(IRInst* inst);
+
+    virtual void emitFuncDecorationsImpl(IRFunc* func);
 
         // Only needed for glsl output with $ prefix intrinsics - so perhaps removable in the future
     virtual void emitTextureOrTextureSamplerTypeImpl(IRTextureTypeBase*  type, char const* baseName) { SLANG_UNUSED(type); SLANG_UNUSED(baseName); }
@@ -489,7 +489,7 @@ public:
     virtual void _emitPostfixTypeAttr(IRAttr* attr);
 
         // Emit the argument list (including paranthesis) in a `CallInst`
-    void _emitCallArgList(IRCall* call);
+    void _emitCallArgList(IRCall* call, int startingOperandIndex = 1);
 
     String _generateUniqueName(const UnownedStringSlice& slice);
 

@@ -441,10 +441,12 @@ static void cloneExtraDecorations(
             default:
                 break;
 
+            case kIROp_HLSLExportDecoration:
             case kIROp_BindExistentialSlotsDecoration:
             case kIROp_LayoutDecoration:
             case kIROp_PublicDecoration:
             case kIROp_SequentialIDDecoration:
+            case kIROp_JVPDerivativeReferenceDecoration:
                 if(!clonedInst->findDecorationImpl(decoration->getOp()))
                 {
                     cloneInst(context, builder, decoration);
@@ -617,12 +619,14 @@ IRInterfaceType* cloneInterfaceTypeImpl(
     IROriginalValuesForClone const& originalValues)
 {
     auto clonedInterface = builder->createInterfaceType(originalInterface->getOperandCount(), nullptr);
+    registerClonedValue(context, clonedInterface, originalValues);
+
     for (UInt i = 0; i < originalInterface->getOperandCount(); i++)
     {
         auto clonedKey = cloneValue(context, originalInterface->getOperand(i));
         clonedInterface->setOperand(i, clonedKey);
     }
-    cloneSimpleGlobalValueImpl(context, originalInterface, originalValues, clonedInterface);
+    cloneSimpleGlobalValueImpl(context, originalInterface, originalValues, clonedInterface, false);
     return clonedInterface;
 }
 
@@ -1348,6 +1352,20 @@ struct IRSpecializationState
     }
 };
 
+static bool _isPublicOrHLSLExported(IRInst* inst)
+{
+    for (auto decoration : inst->getDecorations())
+    {
+        const auto op = decoration->getOp();
+        if (op == kIROp_PublicDecoration ||
+            op == kIROp_HLSLExportDecoration)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 LinkedIR linkIR(
     CodeGenContext* codeGenContext)
 {
@@ -1460,10 +1478,13 @@ LinkedIR linkIR(
     // need to operate on all the global parameters can do so.
     //
     IRVarLayout* irGlobalScopeVarLayout = nullptr;
-    if( auto irGlobalScopeLayoutDecoration = irModuleForLayout->getModuleInst()->findDecoration<IRLayoutDecoration>() )
+    if (irModuleForLayout)
     {
-        auto irOriginalGlobalScopeVarLayout = irGlobalScopeLayoutDecoration->getLayout();
-        irGlobalScopeVarLayout = cast<IRVarLayout>(cloneValue(context, irOriginalGlobalScopeVarLayout));
+        if( auto irGlobalScopeLayoutDecoration = irModuleForLayout->getModuleInst()->findDecoration<IRLayoutDecoration>() )
+        {
+            auto irOriginalGlobalScopeVarLayout = irGlobalScopeLayoutDecoration->getLayout();
+            irGlobalScopeVarLayout = cast<IRVarLayout>(cloneValue(context, irOriginalGlobalScopeVarLayout));
+        }
     }
 
     // Bindings for global generic parameters are currently represented
@@ -1495,14 +1516,14 @@ LinkedIR linkIR(
     {
         for (auto inst : irModule->getGlobalInsts())
         {
-            auto hasPublic = inst->findDecoration<IRPublicDecoration>();
-            if (!hasPublic)
-                continue;
-
-            auto cloned = cloneValue(context, inst);
-            if (!cloned->findDecorationImpl(kIROp_KeepAliveDecoration))
+            // Is it `public` or (HLSL) `export` clone
+            if (_isPublicOrHLSLExported(inst))
             {
-                context->builder->addKeepAliveDecoration(cloned);
+                auto cloned = cloneValue(context, inst);
+                if (!cloned->findDecorationImpl(kIROp_KeepAliveDecoration))
+                {
+                    context->builder->addKeepAliveDecoration(cloned);
+                }
             }
         }
     }

@@ -522,6 +522,14 @@ SlangResult CPPSourceEmitter::calcTypeName(IRType* type, CodeGenTarget target, S
             out << "*";
             return SLANG_OK;
         }
+        case kIROp_NativePtrType:
+        case kIROp_PtrType:
+        {
+            auto elementType = (IRType*)type->getOperand(0);
+            SLANG_RETURN_ON_FAIL(calcTypeName(elementType, target, out));
+            out << "*";
+            return SLANG_OK;
+        }
         case kIROp_RTTIType:
         {
             out << "TypeInfo";
@@ -532,9 +540,31 @@ SlangResult CPPSourceEmitter::calcTypeName(IRType* type, CodeGenTarget target, S
             out << "TypeInfo*";
             return SLANG_OK;
         }
+        case kIROp_NativeStringType:
+        {
+            out << "const char*";
+            return SLANG_OK;
+        }
         case kIROp_StringType:
         {
             out << "String";
+            return SLANG_OK;
+        }
+        case kIROp_ComPtrType:
+        {
+            auto comPtrType = static_cast<IRComPtrType*>(type);
+            auto baseType = cast<IRType>(comPtrType->getOperand(0));
+
+            out << "ComPtr<";
+            SLANG_RETURN_ON_FAIL(calcTypeName(baseType, target, out));
+            out << ">";
+            return SLANG_OK;
+        }
+        case kIROp_ClassType:
+        {
+            out << "RefPtr<";
+            out << getName(type);
+            out << ">";
             return SLANG_OK;
         }
         default:
@@ -1621,6 +1651,12 @@ CPPSourceEmitter::CPPSourceEmitter(const Desc& desc):
 {
     m_semanticUsedFlags = 0;
     //m_semanticUsedFlags = SemanticUsedFlag::GroupID | SemanticUsedFlag::GroupThreadID | SemanticUsedFlag::DispatchThreadID;
+
+    
+    const auto artifactDesc = ArtifactDesc::makeFromCompileTarget(asExternal(getTarget()));
+
+    // If we have runtime library we can convert to a terminated string slice    
+    m_hasString = (artifactDesc.style == ArtifactStyle::Host);
 }
 
 void CPPSourceEmitter::emitParamTypeImpl(IRType* type, String const& name)
@@ -1712,11 +1748,76 @@ void CPPSourceEmitter::_emitWitnessTableDefinitions()
     }
 }
 
+void CPPSourceEmitter::emitComInterface(IRInterfaceType* interfaceType)
+{
+    m_writer->emit("struct ");
+    emitSimpleType(interfaceType);
+    m_writer->emit(" : ");
+    // Emit base types.
+    bool isFirst = true;
+    for (UInt i = 0; i < interfaceType->getOperandCount(); i++)
+    {
+        auto entry = as<IRInterfaceRequirementEntry>(interfaceType->getOperand(i));
+        if (auto witnessTableType = as<IRWitnessTableType>(entry->getRequirementVal()))
+        {
+            if (isFirst)
+            {
+                isFirst = false;
+            }
+            else
+            {
+                m_writer->emit(", ");
+            }
+            emitType((IRType*)witnessTableType->getConformanceType());
+        }
+    }
+    if (isFirst)
+    {
+        m_writer->emit("ISlangUnknown");
+    }
+
+    // Emit methods.
+    m_writer->emit("\n{\n");
+    m_writer->indent();
+    for (UInt i = 0; i < interfaceType->getOperandCount(); i++)
+    {
+        auto entry = as<IRInterfaceRequirementEntry>(interfaceType->getOperand(i));
+        if (auto funcVal = as<IRFuncType>(entry->getRequirementVal()))
+        {
+            m_writer->emit("virtual SLANG_NO_THROW ");
+            emitType(funcVal->getResultType());
+            m_writer->emit(" SLANG_MCALL ");
+            m_writer->emit(getName(entry->getRequirementKey()));
+            m_writer->emit("(");
+            bool isFirstParam = true;
+            for (UInt p = 1; p < funcVal->getParamCount(); p++)
+            {
+                auto paramType = funcVal->getParamType(p);
+                if (!isFirstParam)
+                    m_writer->emit(", ");
+                else
+                    isFirstParam = false;
+
+                emitParamType(paramType, String("param") + String(p));
+            }
+            m_writer->emit(") = 0;\n");
+        }
+    }
+    m_writer->dedent();
+    m_writer->emit("};\n");
+}
+
 void CPPSourceEmitter::emitInterface(IRInterfaceType* interfaceType)
 {
     // Skip built-in interfaces.
     if (isBuiltin(interfaceType))
         return;
+
+    if (interfaceType->findDecoration<IRComInterfaceDecoration>())
+    {
+        emitComInterface(interfaceType);
+        return;
+    }
 
     m_writer->emit("struct ");
     emitSimpleType(interfaceType);
@@ -1866,13 +1967,15 @@ void CPPSourceEmitter::emitEntryPointAttributesImpl(IRFunc* irFunc, IREntryPoint
 
 void CPPSourceEmitter::emitSimpleFuncImpl(IRFunc* func)
 {
+    // Emit function decorations
+    emitFuncDecorations(func);
+
     auto resultType = func->getResultType();
 
     auto name = getName(func);
 
     // Deal with decorations that need
     // to be emitted as attributes
-
 
     // We start by emitting the result type and function name.
     //
@@ -1920,10 +2023,6 @@ void CPPSourceEmitter::emitSimpleFuncImpl(IRFunc* func)
     {
         m_writer->emit("\n{\n");
         m_writer->indent();
-
-        // HACK: forward-declare all the local variables needed for the
-        // parameters of non-entry blocks.
-        emitPhiVarDecls(func);
 
         // Need to emit the operations in the blocks of the function
         emitFunctionBody(func);
@@ -2341,9 +2440,23 @@ bool CPPSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOut
         }
         case kIROp_StringLit:
         {
-            m_writer->emit("String(");
-            m_writer->emit(Slang::Misc::EscapeStringLiteral(as<IRStringLit>(inst)->getStringSlice()));
-            m_writer->emit(")");
+            auto handler = StringEscapeUtil::getHandler(StringEscapeUtil::Style::Cpp);
+
+            StringBuilder buf;
+            const auto slice = as<IRStringLit>(inst)->getStringSlice();
+            StringEscapeUtil::appendQuoted(handler, slice, buf);
+            
+            if (m_hasString)
+            {
+                m_writer->emit("toTerminatedSlice(");
+                m_writer->emit(buf);
+                m_writer->emit(")");
+            }
+            else
+            {
+                m_writer->emit(buf);
+            }
+
             return true;
         }
         case kIROp_PtrLit:
@@ -2389,22 +2502,27 @@ static Index _calcTypeOrder(IRType* a)
     }
 }
 
-void CPPSourceEmitter::emitPreprocessorDirectivesImpl()
+void CPPSourceEmitter::emitPreModuleImpl()
 {
-    SourceWriter* writer = getSourceWriter();
-
-    writer->emit("\n");
-
-    
     if (m_target == CodeGenTarget::CPPSource)
     {
+        // TODO(JS): Previously this opened an anonymous scope for all generated functions
+        // Unfortunately this is a problem if we are just emitting code that is externally available
+        // and is not only accessible through entry points. So for now we disable
+
+        // that this opens an anonymous scope. 
+        // The scope is closed in `emitModuleImpl`
+
+        //m_writer->emit("namespace { // anonymous \n\n");
+
         // When generating kernel code in C++, put all into an anonymous namespace
         // This includes any generated types, and generated intrinsics.
-        m_writer->emit("namespace { // anonymous \n\n");
         m_writer->emit("#ifdef SLANG_PRELUDE_NAMESPACE\n");
         m_writer->emit("using namespace SLANG_PRELUDE_NAMESPACE;\n");
         m_writer->emit("#endif\n\n");
     }
+
+    // Emit generated functions and types
 
     if (m_target == CodeGenTarget::CSource)
     {
@@ -2437,11 +2555,107 @@ void CPPSourceEmitter::emitPreprocessorDirectivesImpl()
         m_intrinsicSet.getIntrinsics(intrinsics);
 
         // Emit all the intrinsics that were used
-        for (auto intrinsic: intrinsics)
+        for (auto intrinsic : intrinsics)
         {
             _maybeEmitSpecializedOperationDefinition(intrinsic);
         }
     }
+}
+
+
+void CPPSourceEmitter::emitGlobalInstImpl(IRInst* inst)
+{
+    if (as<IRGlobalVar>(inst) && inst->findDecoration<IRExternCppDecoration>())
+    {
+        // JS:
+        // Turns out just doing extern "C" means something different on a variable
+        // So we need to wrap in extern "C" { }
+        m_writer->emit("extern \"C\" {\n");
+        Super::emitGlobalInstImpl(inst);
+        m_writer->emit("\n}\n");
+    }
+    else
+    {
+        Super::emitGlobalInstImpl(inst);
+    }
+}
+
+static bool _isExported(IRInst* inst)
+{
+    for (auto decoration : inst->getDecorations())
+    {
+        const auto op = decoration->getOp();
+        if (op == kIROp_PublicDecoration ||
+            op == kIROp_HLSLExportDecoration)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void CPPSourceEmitter::emitVarDecorationsImpl(IRInst* inst)
+{
+    if (as<IRGlobalVar>(inst) && _isExported(inst))
+    {
+        m_writer->emit("SLANG_PRELUDE_SHARED_LIB_EXPORT\n");
+    }
+
+    Super::emitVarDecorationsImpl(inst);
+}
+
+
+void CPPSourceEmitter::_maybeEmitExportLike(IRInst* inst)
+{
+    // Specially handle export, as we don't want to emit it multiple times
+    if (getTargetReq()->isWholeProgramRequest())
+    {
+        if (auto nameHint = inst->findDecoration<IRNameHintDecoration>())
+        {
+            if (nameHint->getName() == "main")
+            {
+                // Don't output any decorations on main function.
+                return;
+            }
+        }
+
+        bool isExternC = false;
+        bool isExported = false;
+
+        // If public/export made it externally visible
+        for (auto decoration : inst->getDecorations())
+        {
+            const auto op = decoration->getOp();
+            if (op == kIROp_ExternCppDecoration)
+            {
+                isExternC = true;
+            }
+            else if (op == kIROp_PublicDecoration ||
+                op == kIROp_HLSLExportDecoration)
+            {
+                isExported = true;
+            }
+        }
+
+        // TODO(JS): Currently export *also* implies it's extern "C" and we can't list twice
+        if (isExported)
+        {
+            m_writer->emit("SLANG_PRELUDE_EXPORT\n");
+        }
+        else if (isExternC)
+        {
+            // It's name is not manged.
+            m_writer->emit("extern \"C\"\n");
+        }
+    }
+}
+
+/* virtual */void CPPSourceEmitter::emitFuncDecorationsImpl(IRFunc* func)
+{
+    _maybeEmitExportLike(func);
+
+    // Use the default for others
+    Super::emitFuncDecorationsImpl(func);
 }
 
 void CPPSourceEmitter::emitOperandImpl(IRInst* inst, EmitOpInfo const&  outerPrec)
@@ -2687,7 +2901,6 @@ void CPPSourceEmitter::emitModuleImpl(IRModule* module, DiagnosticSink* sink)
     
     _emitForwardDeclarations(actions);
 
-    
     {
         // Output all the thread locals 
         for (auto action : actions)
@@ -2711,11 +2924,16 @@ void CPPSourceEmitter::emitModuleImpl(IRModule* module, DiagnosticSink* sink)
     // Emit all witness table definitions.
     _emitWitnessTableDefinitions();
 
-    if (m_target == CodeGenTarget::CPPSource)
-    {
+    // TODO(JS): 
+    // Previously output code was placed in an anonymous namespace
+    // Now that we can have any function available externally (not just entry points)
+    // this doesn't work. 
+
+    //if (m_target == CodeGenTarget::CPPSource)
+    //{
         // Need to close the anonymous namespace when outputting for C++ kernel.
-        m_writer->emit("} // anonymous\n\n");
-    }
+        //m_writer->emit("} // anonymous\n\n");
+    //}
 
      // Finally we need to output dll entry points
 

@@ -36,6 +36,26 @@ namespace Slang
         return false;
     }
 
+    bool isComInterfaceType(IRType* type)
+    {
+        if (!type) return false;
+        if (type->findDecoration<IRComInterfaceDecoration>() || 
+            type->getOp() == kIROp_ComPtrType)
+        {
+            return true;
+        }
+
+        // TODO(JS): Perhaps it should do IRPtrTypeBase, or some more expansive set of 'PtrType's 
+        // but for now test for PtrType
+        if (auto ptrType = as<IRPtrType>(type))
+        {
+            auto valueType = ptrType->getValueType();
+            return valueType->findDecoration<IRComInterfaceDecoration>() != nullptr;
+        }
+
+        return false;
+    }
+
     bool isTypeValue(IRInst* typeInst)
     {
         if (typeInst)
@@ -170,9 +190,14 @@ namespace Slang
         }
         case kIROp_ThisType:
         {
+            auto interfaceType = cast<IRThisType>(paramType)->getConstraintType();
 
-            if (isBuiltin(cast<IRThisType>(paramType)->getConstraintType()))
+            if (isBuiltin(interfaceType))
                 return (IRType*)paramType;
+
+            if (isComInterfaceType((IRType*)interfaceType))
+                return (IRType*)interfaceType;
+
             auto anyValueSize = getInterfaceAnyValueSize(
                 cast<IRThisType>(paramType)->getConstraintType(),
                 paramType->sourceLoc);
@@ -185,6 +210,9 @@ namespace Slang
         case kIROp_InterfaceType:
         {
             if (isBuiltin(paramType))
+                return (IRType*)paramType;
+
+            if (isComInterfaceType((IRType*)paramType))
                 return (IRType*)paramType;
 
             // In the dynamic-dispatch case, a value of interface type
@@ -282,9 +310,12 @@ namespace Slang
         case kIROp_lookup_interface_method:
         {
             auto lookupInterface = static_cast<IRLookupWitnessMethod*>(paramType);
-            auto interfaceType = cast<IRInterfaceType>(cast<IRWitnessTableType>(
-                lookupInterface->getWitnessTable()->getDataType())->getConformanceType());
-            if (isBuiltin(interfaceType))
+            auto witnessTableType = as<IRWitnessTableType>(
+                lookupInterface->getWitnessTable()->getDataType());
+            if (!witnessTableType)
+                return (IRType*)paramType;
+            auto interfaceType = as<IRInterfaceType>(witnessTableType->getConformanceType());
+            if (!interfaceType || isBuiltin(interfaceType))
                 return (IRType*)paramType;
             // Make sure we are looking up inside the original interface type (prior to lowering).
             // Only in the original interface type will an associated type entry have an IRAssociatedType value.
