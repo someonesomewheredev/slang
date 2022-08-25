@@ -14,6 +14,8 @@
 
 #include "slang-syntax.h"
 
+#include <limits>
+
 namespace Slang
 {
         /// Visitor to transition declarations to `DeclCheckState::CheckedModifiers`
@@ -1051,6 +1053,33 @@ namespace Slang
                 addModifier(varDecl, m_astBuilder->create<NVAPIMagicModifier>());
             }
         }
+
+        if (auto interfaceDecl = as<InterfaceDecl>(varDecl->parentDecl))
+        {
+            if (auto basicType = as<BasicExpressionType>(varDecl->getType()))
+            {
+                switch (basicType->baseType)
+                {
+                case BaseType::Bool:
+                case BaseType::Int8:
+                case BaseType::Int16:
+                case BaseType::Int:
+                case BaseType::Int64:
+                case BaseType::UInt8:
+                case BaseType::UInt16:
+                case BaseType::UInt:
+                case BaseType::UInt64:
+                    break;
+                default:
+                    getSink()->diagnose(varDecl, Diagnostics::staticConstRequirementMustBeIntOrBool);
+                    break;
+                }
+            }
+            if (!varDecl->findModifier<HLSLStaticModifier>() || !varDecl->findModifier<ConstModifier>())
+            {
+                getSink()->diagnose(varDecl, Diagnostics::valueRequirementMustBeCompileTimeConst);
+            }
+        }
     }
 
     void SemanticsDeclHeaderVisitor::visitStructDecl(StructDecl* structDecl)
@@ -1586,6 +1615,47 @@ namespace Slang
         return true;
     }
 
+    bool SemanticsVisitor::doesVarMatchRequirement(
+        DeclRef<VarDeclBase>   satisfyingMemberDeclRef,
+        DeclRef<VarDeclBase>   requiredMemberDeclRef,
+        RefPtr<WitnessTable>    witnessTable)
+    {
+        // The type of the satisfying member must match the type of the required member.
+        auto satisfyingType = getType(getASTBuilder(), satisfyingMemberDeclRef);
+        auto requiredType = getType(getASTBuilder(), requiredMemberDeclRef);
+        if (!satisfyingType->equals(requiredType))
+            return false;
+
+        for (auto modifier : requiredMemberDeclRef.getDecl()->modifiers)
+        {
+            bool found = false;
+            for (auto satisfyingModifier : satisfyingMemberDeclRef.getDecl()->modifiers)
+            {
+                if (satisfyingModifier->astNodeType == modifier->astNodeType)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found)
+                return false;
+        }
+
+        auto satisfyingVal = tryConstantFoldDeclRef(satisfyingMemberDeclRef, nullptr);
+        if (satisfyingVal)
+        {
+            witnessTable->add(
+                requiredMemberDeclRef,
+                RequirementWitness(satisfyingVal));
+        }
+        else
+        {
+            witnessTable->add(
+                requiredMemberDeclRef.getDecl(),
+                RequirementWitness(satisfyingMemberDeclRef));
+        }
+        return true;
+    }
 
     bool SemanticsVisitor::doesGenericSignatureMatchRequirement(
         DeclRef<GenericDecl>        satisfyingGenericDeclRef,
@@ -1971,6 +2041,14 @@ namespace Slang
             {
                 ensureDecl(propertyDeclRef, DeclCheckState::CanUseFuncSignature);
                 return doesPropertyMatchRequirement(propertyDeclRef, requiredPropertyDeclRef, witnessTable);
+            }
+        }
+        else if (auto varDeclRef = memberDeclRef.as<VarDeclBase>())
+        {
+            if (auto requiredVarDeclRef = requiredMemberDeclRef.as<VarDeclBase>())
+            {
+                ensureDecl(varDeclRef, DeclCheckState::SignatureChecked);
+                return doesVarMatchRequirement(varDeclRef, requiredVarDeclRef, witnessTable);
             }
         }
         // Default: just assume that thing aren't being satisfied.
@@ -3063,9 +3141,36 @@ namespace Slang
         InheritanceDecl*            inheritanceDecl,
         ContainerDecl*              parentDecl)
     {
+        auto superType = inheritanceDecl->base.type;
+
         if( auto declRefType = as<DeclRefType>(subType) )
         {
             auto declRef = declRefType->declRef;
+
+            if (auto superDeclRefType = as<DeclRefType>(superType))
+            {
+                auto superTypeDecl = superDeclRefType->declRef.getDecl();
+                if (superTypeDecl->findModifier<ComInterfaceAttribute>())
+                {
+                    // A struct cannot implement a COM Interface.
+                    if (auto classDecl = as<ClassDecl>(superTypeDecl))
+                    {
+                        // OK.
+                        SLANG_UNUSED(classDecl);
+                    }
+                    else if (auto subInterfaceDecl = as<InterfaceDecl>(superTypeDecl))
+                    {
+                        if (!subInterfaceDecl->findModifier<ComInterfaceAttribute>())
+                        {
+                            getSink()->diagnose(inheritanceDecl, Diagnostics::interfaceInheritingComMustBeCom);
+                        }
+                    }
+                    else if (auto structDecl = as<StructDecl>(superTypeDecl))
+                    {
+                        getSink()->diagnose(inheritanceDecl, Diagnostics::structCannotImplementComInterface);
+                    }
+                }
+            }
 
             // Don't check conformances for abstract types that
             // are being used to express *required* conformances.
@@ -3089,11 +3194,12 @@ namespace Slang
                 // code to work.
                 return true;
             }
+
+            
         }
 
         // Look at the type being inherited from, and validate
         // appropriately.
-        auto superType = inheritanceDecl->base.type;
 
         DeclaredSubtypeWitness* subIsSuperWitness = m_astBuilder->create<DeclaredSubtypeWitness>();
         subIsSuperWitness->declRef = makeDeclRef(inheritanceDecl);
@@ -3459,7 +3565,36 @@ namespace Slang
         if(!basicType)
             return false;
 
-        return isIntegerBaseType(basicType->baseType);
+        return isIntegerBaseType(basicType->baseType) || basicType->baseType == BaseType::Bool;
+    }
+
+    bool SemanticsVisitor::isIntValueInRangeOfType(IntegerLiteralValue value, Type* type)
+    {
+        auto basicType = as<BasicExpressionType>(type);
+        if (!basicType)
+            return false;
+
+        switch (basicType->baseType)
+        {
+        case BaseType::UInt8:
+            return (value >= 0 && value <= std::numeric_limits<uint8_t>::max()) || (value == -1);
+        case BaseType::UInt16:
+            return (value >= 0 && value <= std::numeric_limits<uint16_t>::max()) || (value == -1);
+        case BaseType::UInt:
+            return (value >= 0 && value <= std::numeric_limits<uint32_t>::max()) || (value == -1);
+        case BaseType::UInt64:
+            return true;
+        case BaseType::Int8:
+            return value >= std::numeric_limits<int8_t>::min() && value <= std::numeric_limits<int8_t>::max();
+        case BaseType::Int16:
+            return value >= std::numeric_limits<int16_t>::min() && value <= std::numeric_limits<int16_t>::max();
+        case BaseType::Int:
+            return value >= std::numeric_limits<int32_t>::min() && value <= std::numeric_limits<int32_t>::max();
+        case BaseType::Int64:
+            return value >= std::numeric_limits<int64_t>::min() && value <= std::numeric_limits<int64_t>::max();
+        default:
+            return false;
+        }
     }
 
     void SemanticsVisitor::validateEnumTagType(Type* type, SourceLoc const& loc)
@@ -3744,7 +3879,7 @@ namespace Slang
             // We want to enforce that this is an integer constant
             // expression, but we don't actually care to retain
             // the value.
-            CheckIntegerConstantExpression(initExpr);
+            CheckIntegerConstantExpression(initExpr, IntegerConstantExpressionCoercionType::AnyInteger, nullptr);
 
             decl->tagExpr = initExpr;
         }

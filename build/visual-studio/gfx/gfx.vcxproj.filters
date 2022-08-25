@@ -18,10 +18,82 @@
     <ClInclude Include="..\..\..\tools\gfx\command-writer.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\tools\gfx\cpu\render-cpu.h">
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-base.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\tools\gfx\cuda\render-cuda.h">
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-buffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-device.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-helper-functions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-pipeline-state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-query.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-resource-views.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-shader-object-layout.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-shader-object.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-shader-program.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-texture.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-base.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-buffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-command-buffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-command-encoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-command-queue.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-context.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-device.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-helper-functions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-pipeline-state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-query.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-resource-views.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-shader-object-layout.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-shader-object.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-shader-program.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-texture.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\tools\gfx\d3d\d3d-swapchain.h">
@@ -153,7 +225,67 @@
     <ClInclude Include="..\..\..\tools\gfx\d3d12\d3d12-vertex-layout.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\..\tools\gfx\debug-layer.h">
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-base.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-buffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-command-buffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-command-encoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-command-queue.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-device.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-fence.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-framebuffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-helper-functions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-pipeline-state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-query.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-render-pass.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-resource-views.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-sampler-state.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-shader-object.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-shader-program.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-shader-table.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-swap-chain.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-texture.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-transient-heap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-vertex-layout.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\tools\gfx\flag-combiner.h">
@@ -275,10 +407,67 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\tools\gfx\cpu\render-cpu.cpp">
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-buffer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\tools\gfx\cuda\render-cuda.cpp">
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-device.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-helper-functions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-pipeline-state.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-query.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-resource-views.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-shader-object-layout.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-shader-object.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-texture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-buffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-command-buffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-command-encoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-command-queue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-device.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-helper-functions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-pipeline-state.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-query.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-shader-object-layout.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-shader-object.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-shader-program.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-texture.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\tools\gfx\d3d\d3d-swapchain.cpp">
@@ -383,7 +572,52 @@
     <ClCompile Include="..\..\..\tools\gfx\d3d12\d3d12-transient-heap.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\tools\gfx\debug-layer.cpp">
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-buffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-command-buffer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-command-encoder.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-command-queue.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-device.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-fence.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-helper-functions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-pipeline-state.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-query.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-resource-views.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-sampler-state.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-shader-object.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-shader-program.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-swap-chain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-texture.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-transient-heap.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\tools\gfx\flag-combiner.cpp">
@@ -485,5 +719,13 @@
     <ClCompile Include="..\..\..\tools\gfx\vulkan\vk-util.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\tools\gfx\gfx.slang">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="..\..\..\tools\gfx\slang.slang">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>

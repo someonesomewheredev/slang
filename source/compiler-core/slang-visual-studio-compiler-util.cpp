@@ -12,70 +12,58 @@
 #endif
 
 #include "../core/slang-io.h"
-#include "slang-artifact-info.h"
+
+#include "slang-artifact-desc-util.h"
+#include "slang-artifact-diagnostic-util.h"
+#include "slang-artifact-util.h"
+#include "slang-artifact-representation-impl.h"
 
 namespace Slang
 {
 
-/* static */ SlangResult VisualStudioCompilerUtil::calcModuleFilePath(const CompileOptions& options, StringBuilder& outPath)
+static void _addFile(const String& path, const ArtifactDesc& desc, IFileArtifactRepresentation* lockFile, List<ComPtr<IArtifact>>& outArtifacts)
 {
-    SLANG_ASSERT(options.modulePath.getLength());
+    auto fileRep = FileArtifactRepresentation::create(IFileArtifactRepresentation::Kind::Owned, path.getUnownedSlice(), lockFile, nullptr);
+    auto artifact = ArtifactUtil::createArtifact(desc);
+    artifact->addRepresentation(fileRep);
 
-    outPath.Clear();
-
-    switch (options.targetType)
-    {
-        case SLANG_SHADER_SHARED_LIBRARY:
-        {
-            outPath << options.modulePath << ".dll";
-            return SLANG_OK;
-        }
-        case SLANG_HOST_EXECUTABLE:
-        {
-            outPath << options.modulePath << ".exe";
-            return SLANG_OK;
-        }
-        case SLANG_OBJECT_CODE:
-        {
-            outPath << options.modulePath << ".obj";
-            return SLANG_OK;
-        }
-        default: break;
-    }
-
-    return SLANG_FAIL;
+    outArtifacts.add(artifact);
 }
 
-/* static */SlangResult VisualStudioCompilerUtil::calcCompileProducts(const CompileOptions& options, ProductFlags flags, List<String>& outPaths)
+/* static */SlangResult VisualStudioCompilerUtil::calcCompileProducts(const CompileOptions& options, ProductFlags flags, IFileArtifactRepresentation* lockFile, List<ComPtr<IArtifact>>& outArtifacts)
 {
     SLANG_ASSERT(options.modulePath.getLength());
 
-    outPaths.clear();
+    const auto targetDesc = ArtifactDescUtil::makeDescForCompileTarget(options.targetType);
+
+    outArtifacts.clear();
 
     if (flags & ProductFlag::Execution)
     {
         StringBuilder builder;
-        SLANG_RETURN_ON_FAIL(calcModuleFilePath(options, builder));
-        outPaths.add(builder);
+        const auto desc = ArtifactDescUtil::makeDescForCompileTarget(options.targetType);
+        SLANG_RETURN_ON_FAIL(ArtifactDescUtil::calcPathForDesc(desc, options.modulePath.getUnownedSlice(), builder));
+
+        _addFile(builder, desc, lockFile, outArtifacts);
     }
     if (flags & ProductFlag::Miscellaneous)
     {
-        outPaths.add(options.modulePath + ".ilk");
+        _addFile(options.modulePath + ".ilk", ArtifactDesc::make(ArtifactKind::BinaryFormat, ArtifactPayload::Unknown, ArtifactStyle::None), lockFile, outArtifacts);
 
         if (options.targetType == SLANG_SHADER_SHARED_LIBRARY)
         {
-            outPaths.add(options.modulePath + ".exp");
-            outPaths.add(options.modulePath + ".lib");
+            _addFile(options.modulePath + ".exp", ArtifactDesc::make(ArtifactKind::BinaryFormat, ArtifactPayload::Unknown, ArtifactStyle::None), lockFile, outArtifacts);
+            _addFile(options.modulePath + ".lib", ArtifactDesc::make(ArtifactKind::Library, ArtifactPayload::HostCPU, targetDesc), lockFile, outArtifacts);
         }
     }
     if (flags & ProductFlag::Compile)
     {
-        outPaths.add(options.modulePath + ".obj");
+        _addFile(options.modulePath + ".obj", ArtifactDesc::make(ArtifactKind::ObjectCode, ArtifactPayload::HostCPU, targetDesc), lockFile, outArtifacts);
     }
     if (flags & ProductFlag::Debug)
     {
         // TODO(JS): Could try and determine based on debug information
-        outPaths.add(options.modulePath + ".pdb");
+        _addFile(options.modulePath + ".pdb", ArtifactDesc::make(ArtifactKind::BinaryFormat, ArtifactPayload::DebugInfo, targetDesc), lockFile, outArtifacts);
     }
 
     return SLANG_OK;
@@ -264,14 +252,15 @@ namespace Slang
     {
         auto desc = artifact->getDesc();
 
-        if (ArtifactInfoUtil::isCpuBinary(desc) && desc.kind == ArtifactKind::Library)
+        if (ArtifactDescUtil::isCpuBinary(desc) && desc.kind == ArtifactKind::Library)
         {
             // Get the libray name and path
-            SLANG_RETURN_ON_FAIL(artifact->requireFileLike(ArtifactKeep::No));
+            ComPtr<IFileArtifactRepresentation> fileRep;
+            SLANG_RETURN_ON_FAIL(artifact->requireFile(ArtifactKeep::Yes, nullptr, fileRep.writeRef()));
 
-            libPathPool.add(ArtifactInfoUtil::getParentPath(artifact));
+            libPathPool.add(ArtifactUtil::getParentPath(fileRep));
             // We need the extension for windows
-            cmdLine.addArg(ArtifactInfoUtil::getBaseName(artifact) + ".lib");
+            cmdLine.addArg(ArtifactDescUtil::getBaseName(artifact->getDesc(), fileRep) + ".lib");
         }
     }
 
@@ -285,21 +274,21 @@ namespace Slang
     return SLANG_OK;
 }
 
-static SlangResult _parseSeverity(const UnownedStringSlice& in, DownstreamDiagnostics::Diagnostic::Severity& outSeverity)
+static SlangResult _parseSeverity(const UnownedStringSlice& in, ArtifactDiagnostic::Severity& outSeverity)
 {
-    typedef DownstreamDiagnostics::Diagnostic::Severity Type;
+    typedef ArtifactDiagnostic::Severity Severity;
 
     if (in == "error" || in == "fatal error")
     {
-        outSeverity = Type::Error;
+        outSeverity = Severity::Error;
     }
     else if (in == "warning")
     {
-        outSeverity = Type::Warning;
+        outSeverity = Severity::Warning;
     }
     else if (in == "info")
     {
-        outSeverity = Type::Info;
+        outSeverity = Severity::Info;
     }
     else
     {
@@ -308,22 +297,22 @@ static SlangResult _parseSeverity(const UnownedStringSlice& in, DownstreamDiagno
     return SLANG_OK;
 }
 
-static SlangResult _parseVisualStudioLine(const UnownedStringSlice& line, DownstreamDiagnostics::Diagnostic& outDiagnostic)
+static SlangResult _parseVisualStudioLine(CharSliceAllocator& allocator, const UnownedStringSlice& line, ArtifactDiagnostic& outDiagnostic)
 {
-    typedef DownstreamDiagnostics::Diagnostic Diagnostic;
+    typedef IArtifactDiagnostics::Diagnostic Diagnostic;
 
     UnownedStringSlice linkPrefix = UnownedStringSlice::fromLiteral("LINK :");
     if (line.startsWith(linkPrefix))
     {
-        outDiagnostic.stage = Diagnostic::Stage::Link;
-        outDiagnostic.severity = Diagnostic::Severity::Info;
+        outDiagnostic.stage = ArtifactDiagnostic::Stage::Link;
+        outDiagnostic.severity = ArtifactDiagnostic::Severity::Info;
 
-        outDiagnostic.text = UnownedStringSlice(line.begin() + linkPrefix.getLength(), line.end());
+        outDiagnostic.text = allocator.allocate(line.begin() + linkPrefix.getLength(), line.end());
 
         return SLANG_OK;
     }
 
-    outDiagnostic.stage = Diagnostic::Stage::Compile;
+    outDiagnostic.stage = ArtifactDiagnostic::Stage::Compile;
 
     const char*const start = line.begin();
     const char*const end = line.end();
@@ -382,13 +371,13 @@ static SlangResult _parseVisualStudioLine(const UnownedStringSlice& line, Downst
                 return SLANG_FAIL;
             }
 
-            outDiagnostic.filePath = UnownedStringSlice(start, lineNoStart);
-            outDiagnostic.fileLine = lineNo;
+            outDiagnostic.filePath = allocator.allocate(start, lineNoStart);
+            outDiagnostic.location.line = lineNo;
         }
         else
         {
-            outDiagnostic.filePath = UnownedStringSlice(start, cur + colonIndex);
-            outDiagnostic.fileLine = 0;
+            outDiagnostic.filePath = allocator.allocate(start, cur + colonIndex);
+            outDiagnostic.location.line = 0;
         }
 
         // Save the remaining text in 'postPath'
@@ -414,8 +403,8 @@ static SlangResult _parseVisualStudioLine(const UnownedStringSlice& line, Downst
         }
 
         // Extract the code
-        outDiagnostic.code = UnownedStringSlice(errorSection.begin() + errorCodeIndex + 1, errorSection.end());
-        if (outDiagnostic.code.startsWith(UnownedStringSlice::fromLiteral("LNK")))
+        outDiagnostic.code = allocator.allocate(errorSection.begin() + errorCodeIndex + 1, errorSection.end());
+        if (asStringSlice(outDiagnostic.code).startsWith(UnownedStringSlice::fromLiteral("LNK")))
         {
             outDiagnostic.stage = Diagnostic::Stage::Link;
         }
@@ -427,16 +416,18 @@ static SlangResult _parseVisualStudioLine(const UnownedStringSlice& line, Downst
         postError = UnownedStringSlice(postPath.begin() + errorColonIndex + 1, end); 
     }
 
-    outDiagnostic.text = postError;
+    outDiagnostic.text = allocator.allocate(postError);
 
     return SLANG_OK;
 }
 
-/* static */SlangResult VisualStudioCompilerUtil::parseOutput(const ExecuteResult& exeRes, DownstreamDiagnostics& outDiagnostics)
+/* static */SlangResult VisualStudioCompilerUtil::parseOutput(const ExecuteResult& exeRes, IArtifactDiagnostics* diagnostics)
 {
-    outDiagnostics.reset();
+    diagnostics->reset();
 
-    outDiagnostics.rawDiagnostics = exeRes.standardOutput;
+    diagnostics->setRaw(CharSliceCaster::asTerminatedCharSlice(exeRes.standardOutput));
+
+    CharSliceAllocator allocator;
 
     for (auto line : LineParser(exeRes.standardOutput.getUnownedSlice()))
     {
@@ -445,17 +436,17 @@ static SlangResult _parseVisualStudioLine(const UnownedStringSlice& line, Downst
         fprintf(stdout, "\n");
 #endif
 
-        Diagnostic diagnostic;
-        if (SLANG_SUCCEEDED(_parseVisualStudioLine(line, diagnostic)))
+        ArtifactDiagnostic diagnostic;
+        if (SLANG_SUCCEEDED(_parseVisualStudioLine(allocator, line, diagnostic)))
         {
-            outDiagnostics.diagnostics.add(diagnostic);
+            diagnostics->add(diagnostic);
         }
     }
 
     // if it has a compilation error.. set on output
-    if (outDiagnostics.has(Diagnostic::Severity::Error))
+    if (diagnostics->hasOfAtLeastSeverity(ArtifactDiagnostic::Severity::Error))
     {
-        outDiagnostics.result = SLANG_FAIL;
+        diagnostics->setResult(SLANG_FAIL);
     }
 
     return SLANG_OK;

@@ -7,6 +7,8 @@
 #include "../core/slang-file-system.h"
 
 #include "../compiler-core/slang-downstream-compiler.h"
+#include "../compiler-core/slang-downstream-compiler-util.h"
+
 #include "../compiler-core/slang-name.h"
 #include "../compiler-core/slang-include-system.h"
 #include "../compiler-core/slang-command-line-args.h"
@@ -24,6 +26,8 @@
 #include "slang-content-assist-info.h"
 
 #include "slang-serialize-ir-types.h"
+
+#include "../compiler-core/slang-artifact-representation-impl.h"
 
 #include "../../slang.h"
 
@@ -45,7 +49,7 @@ namespace Slang
         GenerateChoice
     };
 
-    enum class StageTarget
+    enum class StageTarget 
     {
         Unknown,
         VertexShader,
@@ -56,7 +60,7 @@ namespace Slang
         ComputeShader,
     };
 
-    enum class CodeGenTarget 
+    enum class CodeGenTarget : SlangCompileTargetIntegral
     {
         Unknown             = SLANG_TARGET_UNKNOWN,
         None                = SLANG_TARGET_NONE,
@@ -87,13 +91,13 @@ namespace Slang
 
     void printDiagnosticArg(StringBuilder& sb, CodeGenTarget val);
 
-    enum class ContainerFormat : SlangContainerFormat
+    enum class ContainerFormat : SlangContainerFormatIntegral
     {
         None            = SLANG_CONTAINER_FORMAT_NONE,
         SlangModule     = SLANG_CONTAINER_FORMAT_SLANG_MODULE,
     };
 
-    enum class LineDirectiveMode : SlangLineDirectiveMode
+    enum class LineDirectiveMode : SlangLineDirectiveModeIntegral
     {
         Default     = SLANG_LINE_DIRECTIVE_MODE_DEFAULT,
         None        = SLANG_LINE_DIRECTIVE_MODE_NONE,
@@ -113,13 +117,13 @@ namespace Slang
     // laid out with row-major or column-major
     // storage.
     //
-    enum MatrixLayoutMode
+    enum MatrixLayoutMode : SlangMatrixLayoutModeIntegral
     {
         kMatrixLayoutMode_RowMajor      = SLANG_MATRIX_LAYOUT_ROW_MAJOR,
         kMatrixLayoutMode_ColumnMajor   = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR,
     };
 
-    enum class DebugInfoLevel : SlangDebugInfoLevel
+    enum class DebugInfoLevel : SlangDebugInfoLevelIntegral
     {
         None        = SLANG_DEBUG_INFO_LEVEL_NONE,
         Minimal     = SLANG_DEBUG_INFO_LEVEL_MINIMAL,
@@ -127,7 +131,7 @@ namespace Slang
         Maximal     = SLANG_DEBUG_INFO_LEVEL_MAXIMAL,
     };
 
-    enum class OptimizationLevel : SlangOptimizationLevel
+    enum class OptimizationLevel : SlangOptimizationLevelIntegral
     {
         None    = SLANG_OPTIMIZATION_LEVEL_NONE,
         Default = SLANG_OPTIMIZATION_LEVEL_DEFAULT,
@@ -141,119 +145,6 @@ namespace Slang
     class Linkage;
     class Module;
     class TranslationUnitRequest;
-
-    struct ShaderBindingRange
-    {
-        slang::ParameterCategory category = slang::ParameterCategory::None;
-        UInt spaceIndex = 0;
-        UInt registerIndex = 0;
-        UInt registerCount = 0; // 0 for unsized
-
-        bool isInfinite() const
-        {
-            return registerCount == 0;
-        }
-
-        bool containsBinding(slang::ParameterCategory _category, UInt _spaceIndex, UInt _registerIndex) const
-        {
-            return category == _category
-                && spaceIndex == _spaceIndex
-                && registerIndex <= _registerIndex
-                && (isInfinite() || registerCount + registerIndex > _registerIndex);
-        }
-
-        bool intersectsWith(const ShaderBindingRange& other) const
-        {
-            if (category != other.category || spaceIndex != other.spaceIndex)
-                return false;
-
-            const bool leftIntersection = (registerIndex < other.registerIndex + other.registerCount) || other.isInfinite();
-            const bool rightIntersection = (other.registerIndex < registerIndex + registerCount) || isInfinite();
-
-            return leftIntersection && rightIntersection;
-        }
-
-        bool adjacentTo(const ShaderBindingRange& other) const
-        {
-            if (category != other.category || spaceIndex != other.spaceIndex)
-                return false;
-
-            const bool leftIntersection = (registerIndex <= other.registerIndex + other.registerCount) || other.isInfinite();
-            const bool rightIntersection = (other.registerIndex <= registerIndex + registerCount) || isInfinite();
-
-            return leftIntersection && rightIntersection;
-        }
-
-        void mergeWith(const ShaderBindingRange other)
-        {
-            UInt newRegisterIndex = Math::Min(registerIndex, other.registerIndex);
-
-            if (other.isInfinite())
-                registerCount = 0;
-            else if (!isInfinite())
-                registerCount = Math::Max(registerIndex + registerCount, other.registerIndex + other.registerCount) - newRegisterIndex;
-
-            registerIndex = newRegisterIndex;
-        }
-
-        static bool isUsageTracked(slang::ParameterCategory category)
-        {
-            switch(category)
-            {
-            case slang::ConstantBuffer:
-            case slang::ShaderResource:
-            case slang::UnorderedAccess:
-            case slang::SamplerState:
-                return true;
-            default:
-                return false;
-            }
-        }
-    };
-
-    struct PostEmitMetadata : public RefObject
-    {
-        List<ShaderBindingRange> usedBindings;
-    };
-
-    // Result of compiling an entry point.
-    // Should only ever be string, binary or shared library
-    class CompileResult
-    {
-    public:
-        CompileResult() = default;
-        explicit CompileResult(String const& str, RefPtr<PostEmitMetadata> metadata)
-            : format(ResultFormat::Text)
-            , outputString(str)
-            , postEmitMetadata(metadata) {}
-
-        explicit CompileResult(ISlangBlob* inBlob)
-            : format(ResultFormat::Binary)
-            , blob(inBlob) {}
-
-        explicit CompileResult(DownstreamCompileResult* inDownstreamResult, RefPtr<PostEmitMetadata> metadata)
-            : format(ResultFormat::Binary)
-            , downstreamResult(inDownstreamResult)
-            , postEmitMetadata(metadata) {}
-
-        explicit CompileResult(const UnownedStringSlice& slice )
-            : format(ResultFormat::Text)
-            , outputString(slice) {}
-
-        SlangResult getBlob(ComPtr<ISlangBlob>& outBlob) const;
-        SlangResult getSharedLibrary(ComPtr<ISlangSharedLibrary>& outSharedLibrary);
-
-        SlangResult isParameterLocationUsed(SlangParameterCategory category, UInt spaceIndex, UInt registerIndex, bool& outUsed);
-                
-        ResultFormat format = ResultFormat::None;
-        String outputString;                    ///< Only set if result type is ResultFormat::Text
-
-        mutable ComPtr<ISlangBlob> blob;
-
-        RefPtr<DownstreamCompileResult> downstreamResult;
-
-        RefPtr<PostEmitMetadata> postEmitMetadata;
-    };
 
         /// Information collected about global or entry-point shader parameters
     struct ShaderParamInfo
@@ -1319,6 +1210,21 @@ namespace Slang
             return SLANG_OK;
         }
 
+        virtual SlangInt32 SLANG_MCALL getDefinedEntryPointCount() override
+        {
+            return (SlangInt32)m_entryPoints.getCount();
+        }
+
+        virtual SlangResult SLANG_MCALL getDefinedEntryPoint(SlangInt32 index, slang::IEntryPoint** outEntryPoint) override
+        {
+            if (index < 0 || index >= m_entryPoints.getCount())
+                return SLANG_E_INVALID_ARG;
+
+            ComPtr<slang::IEntryPoint> entryPoint(m_entryPoints[index].Ptr());
+            *outEntryPoint = entryPoint.detach();
+            return SLANG_OK;
+        }
+
         //
 
             /// Create a module (initially empty).
@@ -1510,14 +1416,14 @@ namespace Slang
         SourceManager* getSourceManager();
     };
 
-    enum class FloatingPointMode : SlangFloatingPointMode
+    enum class FloatingPointMode : SlangFloatingPointModeIntegral
     {
         Default = SLANG_FLOATING_POINT_MODE_DEFAULT,
         Fast = SLANG_FLOATING_POINT_MODE_FAST,
         Precise = SLANG_FLOATING_POINT_MODE_PRECISE,
     };
 
-    enum class WriterChannel : SlangWriterChannel
+    enum class WriterChannel : SlangWriterChannelIntegral
     {
         Diagnostic = SLANG_WRITER_CHANNEL_DIAGNOSTIC,
         StdOutput = SLANG_WRITER_CHANNEL_STD_OUTPUT,
@@ -1525,7 +1431,7 @@ namespace Slang
         CountOf = SLANG_WRITER_CHANNEL_COUNT_OF,
     };
 
-    enum class WriterMode : SlangWriterMode
+    enum class WriterMode : SlangWriterModeIntegral
     {
         Text = SLANG_WRITER_MODE_TEXT,
         Binary = SLANG_WRITER_MODE_BINARY,
@@ -2238,11 +2144,10 @@ namespace Slang
             /// been requested, report any errors that arise during
             /// code generation to the given `sink`.
             ///
-        CompileResult& getOrCreateEntryPointResult(Int entryPointIndex, DiagnosticSink* sink);
-        CompileResult& getOrCreateWholeProgramResult(DiagnosticSink* sink);
+        IArtifact* getOrCreateEntryPointResult(Int entryPointIndex, DiagnosticSink* sink);
+        IArtifact* getOrCreateWholeProgramResult(DiagnosticSink* sink);
 
-
-        CompileResult& getExistingWholeProgramResult()
+        IArtifact* getExistingWholeProgramResult()
         {
             return m_wholeProgramResult;
         }
@@ -2251,12 +2156,12 @@ namespace Slang
             /// This routine assumes that `getOrCreateEntryPointResult`
             /// has already been called previously.
             ///
-        CompileResult& getExistingEntryPointResult(Int entryPointIndex)
+        IArtifact* getExistingEntryPointResult(Int entryPointIndex)
         {
             return m_entryPointResults[entryPointIndex];
         }
 
-        CompileResult& _createWholeProgramResult(
+        IArtifact* _createWholeProgramResult(
             DiagnosticSink*         sink,
             EndToEndCompileRequest* endToEndReq = nullptr);
 
@@ -2267,7 +2172,7 @@ namespace Slang
             ///
             /// Shouldn't be called directly by most code.
             ///
-        CompileResult& _createEntryPointResult(
+        IArtifact* _createEntryPointResult(
             Int                     entryPointIndex,
             DiagnosticSink*         sink,
             EndToEndCompileRequest* endToEndReq = nullptr);
@@ -2294,8 +2199,8 @@ namespace Slang
         // Generated compile results for each entry point
         // in the parent `Program` (indexing matches
         // the order they are given in the `Program`)
-        CompileResult m_wholeProgramResult;
-        List<CompileResult> m_entryPointResults;
+        ComPtr<IArtifact> m_wholeProgramResult;
+        List<ComPtr<IArtifact>> m_entryPointResults;
 
         RefPtr<IRModule> m_irModuleForLayout;
     };
@@ -2483,60 +2388,31 @@ namespace Slang
 
         //
 
-        CompileResult emitEntryPoints();
+        SlangResult emitEntryPoints(ComPtr<IArtifact>& outArtifact);
 
-        SlangResult dissassembleWithDownstream(
-            const void* data,
-            size_t          dataSizeInBytes,
-            ISlangBlob** outBlob);
-
-        SlangResult dissassembleWithDownstream(
-            DownstreamCompileResult* downstreamResult,
-            ISlangBlob** outBlob);
+        void maybeDumpIntermediate(IArtifact* artifact);
 
     protected:
         CodeGenTarget m_targetFormat = CodeGenTarget::Unknown;
         ExtensionTracker* m_extensionTracker = nullptr;
 
-        // Helper to dump intermediate output when debugging
-        void maybeDumpIntermediate(
+            /// Will output assembly as well as the artifact if appropriate for the artifact type for assembly output
+            /// and conversion is possible
+        void _dumpIntermediateMaybeWithAssembly(IArtifact* artifact);
+
+        void _dumpIntermediate(IArtifact* artifact);
+        void _dumpIntermediate(
+            const ArtifactDesc& desc,
             void const* data,
             size_t      size);
-        void maybeDumpIntermediate(
-            char const* text);
-
-        void maybeDumpIntermediate(
-            DownstreamCompileResult* compileResult);
-
-        void dumpIntermediate(
-            void const* data,
-            size_t      size,
-            char const* ext,
-            bool        isBinary);
-
-        void dumpIntermediateText(
-            void const* data,
-            size_t      size,
-            char const* ext);
-
-        void dumpIntermediateBinary(
-            void const* data,
-            size_t      size,
-            char const* ext);
 
         /* Emits entry point source taking into account if a pass-through or not. Uses 'targetFormat' to determine
         the target (not targetReq) */
-        SlangResult emitEntryPointsSource(
-            String& outSource,
-            RefPtr<PostEmitMetadata>& outMetadata);
+        SlangResult emitEntryPointsSource(ComPtr<IArtifact>& outArtifact);
 
-        SlangResult emitEntryPointsSourceFromIR(
-            String& outSource,
-            RefPtr<PostEmitMetadata>& outMetadata);
-
-        SlangResult emitWithDownstreamForEntryPoints(
-            RefPtr<DownstreamCompileResult>& outResult,
-            RefPtr<PostEmitMetadata>& outMetadata);
+        SlangResult emitEntryPointsSourceFromIR(ComPtr<IArtifact>& outArtifact);
+            
+        SlangResult emitWithDownstreamForEntryPoints(ComPtr<IArtifact>& outArtifact);
 
         /* Determines a suitable filename to identify the input for a given entry point being compiled.
         If the end-to-end compile is a pass-through case, will attempt to find the (unique) source file
@@ -2551,9 +2427,7 @@ namespace Slang
             Int                     entryPointIndex);
 
 
-        SlangResult _emitEntryPoints(
-            RefPtr<DownstreamCompileResult>& outDownstreamResult,
-            RefPtr<PostEmitMetadata>& outMetadata);
+        SlangResult _emitEntryPoints(ComPtr<IArtifact>& outArtifact);
 
     private:
         Shared* m_shared = nullptr;
@@ -2764,6 +2638,7 @@ namespace Slang
             return m_specializedEntryPoints[index];
         }
         
+        void writeArtifactToStandardOutput(IArtifact* artifact, DiagnosticSink* sink);
 
         void generateOutput();
 
@@ -2942,14 +2817,15 @@ namespace Slang
         {
             return m_downstreamCompileTime;
         }
-
+        
             /// Get the downstream compiler for a transition
-        DownstreamCompiler* getDownstreamCompiler(CodeGenTarget source, CodeGenTarget target);
+        IDownstreamCompiler* getDownstreamCompiler(CodeGenTarget source, CodeGenTarget target);
         
         Scope* baseLanguageScope = nullptr;
         Scope* coreLanguageScope = nullptr;
         Scope* hlslLanguageScope = nullptr;
         Scope* slangLanguageScope = nullptr;
+        Scope* autodiffLanguageScope = nullptr;
 
         ModuleDecl* baseModuleDecl = nullptr;
         List<RefPtr<Module>> stdlibModules;
@@ -2981,10 +2857,12 @@ namespace Slang
         String slangLibraryCode;
         String hlslLibraryCode;
         String glslLibraryCode;
+        String autodiffLibraryCode;
 
         String getStdlibPath();
         String getCoreLibraryCode();
         String getHLSLLibraryCode();
+        String getAutodiffLibraryCode();
 
      
         RefPtr<SharedASTBuilder> m_sharedASTBuilder;
@@ -2995,7 +2873,7 @@ namespace Slang
         void _setSharedLibraryLoader(ISlangSharedLibraryLoader* loader);
 
             /// Will try to load the library by specified name (using the set loader), if not one already available.
-        DownstreamCompiler* getOrLoadDownstreamCompiler(PassThroughMode type, DiagnosticSink* sink);
+        IDownstreamCompiler* getOrLoadDownstreamCompiler(PassThroughMode type, DiagnosticSink* sink);
             /// Will unload the specified shared library if it's currently loaded 
         void resetDownstreamCompiler(PassThroughMode type);
 
@@ -3022,7 +2900,7 @@ namespace Slang
         int m_downstreamCompilerInitialized = 0;                                        
 
         RefPtr<DownstreamCompilerSet> m_downstreamCompilerSet;                                  ///< Information about all available downstream compilers.
-        RefPtr<DownstreamCompiler> m_downstreamCompilers[int(PassThroughMode::CountOf)];        ///< A downstream compiler for a pass through
+        ComPtr<IDownstreamCompiler> m_downstreamCompilers[int(PassThroughMode::CountOf)];        ///< A downstream compiler for a pass through
         DownstreamCompilerLocatorFunc m_downstreamCompilerLocators[int(PassThroughMode::CountOf)];
         Name* m_completionTokenName = nullptr; ///< The name of a completion request token.
 

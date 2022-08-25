@@ -163,7 +163,6 @@
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>_DEBUG;SLANG_RT_DYNAMIC;SLANG_RT_DYNAMIC_EXPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
@@ -173,14 +172,12 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ImportLibrary>..\..\..\bin\windows-x86\debug\slang-rt.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>_DEBUG;SLANG_RT_DYNAMIC;SLANG_RT_DYNAMIC_EXPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
@@ -190,14 +187,12 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ImportLibrary>..\..\..\bin\windows-x64\debug\slang-rt.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug aarch64|ARM'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>_DEBUG;SLANG_RT_DYNAMIC;SLANG_RT_DYNAMIC_EXPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <Optimization>Disabled</Optimization>
@@ -207,14 +202,12 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ImportLibrary>..\..\..\bin\windows-aarch64\debug\slang-rt.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>NDEBUG;SLANG_RT_DYNAMIC;SLANG_RT_DYNAMIC_EXPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -228,14 +221,12 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <ImportLibrary>..\..\..\bin\windows-x86\release\slang-rt.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>NDEBUG;SLANG_RT_DYNAMIC;SLANG_RT_DYNAMIC_EXPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -249,14 +240,12 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <ImportLibrary>..\..\..\bin\windows-x64\release\slang-rt.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release aarch64|ARM'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level4</WarningLevel>
-      <TreatWarningAsError>true</TreatWarningAsError>
       <PreprocessorDefinitions>NDEBUG;SLANG_RT_DYNAMIC;SLANG_RT_DYNAMIC_EXPORT;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <Optimization>Full</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -270,7 +259,6 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <ImportLibrary>..\..\..\bin\windows-aarch64\release\slang-rt.lib</ImportLibrary>
-      <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -281,6 +269,9 @@
     <ClInclude Include="..\..\..\source\core\slang-basic.h" />
     <ClInclude Include="..\..\..\source\core\slang-blob.h" />
     <ClInclude Include="..\..\..\source\core\slang-byte-encode-util.h" />
+    <ClInclude Include="..\..\..\source\core\slang-castable-list-impl.h" />
+    <ClInclude Include="..\..\..\source\core\slang-castable-list.h" />
+    <ClInclude Include="..\..\..\source\core\slang-castable-util.h" />
     <ClInclude Include="..\..\..\source\core\slang-char-encode.h" />
     <ClInclude Include="..\..\..\source\core\slang-char-util.h" />
     <ClInclude Include="..\..\..\source\core\slang-chunked-list.h" />
@@ -289,6 +280,7 @@
     <ClInclude Include="..\..\..\source\core\slang-common.h" />
     <ClInclude Include="..\..\..\source\core\slang-compression-system.h" />
     <ClInclude Include="..\..\..\source\core\slang-deflate-compression-system.h" />
+    <ClInclude Include="..\..\..\source\core\slang-destroyable.h" />
     <ClInclude Include="..\..\..\source\core\slang-dictionary.h" />
     <ClInclude Include="..\..\..\source\core\slang-exception.h" />
     <ClInclude Include="..\..\..\source\core\slang-file-system.h" />
@@ -298,6 +290,7 @@
     <ClInclude Include="..\..\..\source\core\slang-hex-dump-util.h" />
     <ClInclude Include="..\..\..\source\core\slang-http.h" />
     <ClInclude Include="..\..\..\source\core\slang-io.h" />
+    <ClInclude Include="..\..\..\source\core\slang-lazy-castable-list.h" />
     <ClInclude Include="..\..\..\source\core\slang-linked-list.h" />
     <ClInclude Include="..\..\..\source\core\slang-list.h" />
     <ClInclude Include="..\..\..\source\core\slang-lz4-compression-system.h" />
@@ -342,6 +335,8 @@
     <ClCompile Include="..\..\..\source\core\slang-archive-file-system.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-blob.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-byte-encode-util.cpp" />
+    <ClCompile Include="..\..\..\source\core\slang-castable-list-impl.cpp" />
+    <ClCompile Include="..\..\..\source\core\slang-castable-util.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-char-encode.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-char-util.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-command-line.cpp" />
@@ -351,6 +346,7 @@
     <ClCompile Include="..\..\..\source\core\slang-hex-dump-util.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-http.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-io.cpp" />
+    <ClCompile Include="..\..\..\source\core\slang-lazy-castable-list.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-lz4-compression-system.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-memory-arena.cpp" />
     <ClCompile Include="..\..\..\source\core\slang-offset-container.cpp" />

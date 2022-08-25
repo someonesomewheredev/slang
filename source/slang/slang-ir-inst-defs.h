@@ -57,6 +57,9 @@ INST(Nop, nop, 0, 0)
     INST(ConjunctionType, Conjunction, 0, 0)
     INST(AttributedType, Attributed, 0, 0)
     INST(ResultType, Result, 2, 0)
+    INST(OptionalType, Optional, 1, 0)
+
+    INST(DifferentialPairType, DiffPair, 1, 0)
 
     /* BindExistentialsTypeBase */
 
@@ -265,6 +268,10 @@ INST(undefined, undefined, 0, 0)
 //
 INST(DefaultConstruct, defaultConstruct, 0, 0)
 
+INST(MakeDifferentialPair, MakeDiffPair, 2, 0)
+INST(DifferentialPairGetDifferential, GetDifferential, 1, 0)
+INST(DifferentialPairGetPrimal, GetPrimal, 1, 0)
+
 INST(Specialize, specialize, 2, 0)
 INST(lookup_interface_method, lookup_interface_method, 2, 0)
 INST(GetSequentialID, GetSequentialID, 1, 0)
@@ -286,7 +293,10 @@ INST(MakeResultError, makeResultError, 1, 0)
 INST(IsResultError, isResultError, 1, 0)
 INST(GetResultError, getResultError, 1, 0)
 INST(GetResultValue, getResultValue, 1, 0)
-
+INST(GetOptionalValue, getOptionalValue, 1, 0)
+INST(OptionalHasValue, optionalHasValue, 1, 0)
+INST(MakeOptionalValue, makeOptionalValue, 1, 0)
+INST(MakeOptionalNone, makeOptionalNone, 1, 0)
 INST(Call, call, 1, 0)
 
 INST(RTTIObject, rtti_object, 0, 0)
@@ -645,6 +655,8 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
 
         /// An dllImport decoration marks a function as imported from a DLL. Slang will generate dynamic function loading logic to use this function at runtime.
     INST(DllImportDecoration, dllImport, 2, 0)
+        /// An dllExport decoration marks a function as an export symbol. Slang will generate a native wrapper function that is exported to DLL.
+    INST(DllExportDecoration, dllExport, 1, 0)
 
         /// Marks an interface as a COM interface declaration.
     INST(ComInterfaceDecoration, COMInterface, 0, 0)
@@ -690,6 +702,10 @@ INST(HighLevelDeclDecoration,               highLevelDecl,          1, 0)
         /// generated derivative function.
     INST(JVPDerivativeReferenceDecoration, jvpFnReference, 1, 0)
 
+        /// Marks a class type as a COM interface implementation, which enables
+        /// the witness table to be easily picked up by emit.
+    INST(COMWitnessDecoration, COMWitnessDecoration, 1, 0)
+
         /// Marks a struct type as being used as a structured buffer block.
         /// Recognized by SPIRV-emit pass so we can emit a SPIRV `BufferBlock` decoration.
     INST(SPIRVBufferBlockDecoration, spvBufferBlock, 0, 0)
@@ -732,7 +748,8 @@ INST(ExtractTaggedUnionPayload,         extractTaggedUnionPayload,  1, 0)
 
 INST(BitCast,                           bitCast,                    1, 0)
 INST(Reinterpret,                       reinterpret,                1, 0)
-
+INST(CastPtrToBool, CastPtrToBool, 1, 0)
+INST(IsType, IsType, 3, 0)
 INST(JVPDifferentiate,                   jvpDifferentiate,            1, 0)
 
 // Converts other resources (such as ByteAddressBuffer) to the equivalent StructuredBuffer

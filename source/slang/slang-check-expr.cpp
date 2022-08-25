@@ -231,6 +231,21 @@ namespace Slang
         return expr;
     }
 
+    Expr* SemanticsVisitor::maybeOpenRef(Expr* expr)
+    {
+        auto exprType = expr->type.type;
+
+        if (auto refType = as<RefType>(exprType))
+        {
+            auto openRef = m_astBuilder->create<OpenRefExpr>();
+            openRef->innerExpr = expr;
+            openRef->type.isLeftValue = true;
+            openRef->type.type = refType->getValueType();
+            return openRef;
+        }
+        return expr;
+    }
+
     static SourceLoc _getMemberOpLoc(Expr* expr)
     {
         if (auto m = as<MemberExpr>(expr))
@@ -367,15 +382,15 @@ namespace Slang
         Expr*    base,
         SourceLoc       loc)
     {
-        auto ptrLikeType = as<PointerLikeType>(base->type);
-        SLANG_ASSERT(ptrLikeType);
+        auto elementType = getPointedToTypeIfCanImplicitDeref(base->type);
+        SLANG_ASSERT(elementType);
 
         auto derefExpr = m_astBuilder->create<DerefExpr>();
         derefExpr->loc = loc;
         derefExpr->base = base;
-        derefExpr->type = QualType(ptrLikeType->elementType);
+        derefExpr->type = QualType(elementType);
 
-        // TODO(tfoley): handle l-value status here
+        derefExpr->type.isLeftValue = base->type.isLeftValue;
 
         return derefExpr;
     }
@@ -807,6 +822,12 @@ namespace Slang
         return expr;
     }
 
+    Expr* SemanticsExprVisitor::visitNoneLiteralExpr(NoneLiteralExpr* expr)
+    {
+        expr->type = m_astBuilder->getNoneType();
+        return expr;
+    }
+
     Expr* SemanticsExprVisitor::visitIntegerLiteralExpr(IntegerLiteralExpr* expr)
     {
         // The expression might already have a type, determined by its suffix.
@@ -863,7 +884,8 @@ namespace Slang
 
         auto funcDeclRef = getDeclRef(m_astBuilder, funcDeclRefExpr);
         auto intrinsicMod = funcDeclRef.getDecl()->findModifier<IntrinsicOpModifier>();
-        if (!intrinsicMod)
+        auto implicitCast = funcDeclRef.getDecl()->findModifier<ImplicitConversionModifier>();
+        if (!intrinsicMod && !implicitCast)
         {
             // We can't constant fold anything that doesn't map to a builtin
             // operation right now.
@@ -906,7 +928,7 @@ namespace Slang
 
         if (!allConst)
         {
-            // TODO(tfoley): We probably want to support a very limited number of operations
+            // We support a very limited number of operations
             // on "constants" that aren't actually known, to be able to handle a generic
             // that takes an integer `N` but then constructs a vector of size `N+1`.
             //
@@ -915,60 +937,158 @@ namespace Slang
             // need inference to be smart enough to know that `2 + N` and `N + 2` are the
             // same value, as are `N + M + 1 + 1` and `M + 2 + N`.
             //
-            // For now we can just bail in this case.
+            // This is done by constructing a 'PolynomialIntVal' and rely on its
+            // `canonicalize` operation.
+            if (implicitCast)
+            {
+                // We cannot support casting in this case.
+                return nullptr;
+            }
+
+            auto opName = funcDeclRef.getName();
+
+            // handle binary operators
+            if (opName == getName("-"))
+            {
+                if (argCount == 1)
+                {
+                    return PolynomialIntVal::neg(m_astBuilder, argVals[0]);
+                }
+                else if (argCount == 2)
+                {
+                    return PolynomialIntVal::sub(m_astBuilder, argVals[0], argVals[1]);
+                }
+            }
+            else if (opName == getName("+"))
+            {
+                if (argCount == 1)
+                {
+                    return argVals[0];
+                }
+                else if (argCount == 2)
+                {
+                    return PolynomialIntVal::add(m_astBuilder, argVals[0], argVals[1]);
+                }
+            }
+            else if (opName == getName("*"))
+            {
+                if (argCount == 2)
+                {
+                    return PolynomialIntVal::mul(m_astBuilder, argVals[0], argVals[1]);
+                }
+            }
+            else if (opName == getName("/") || opName == getName("==") || opName == getName(">=") || opName == getName("<=") || opName == getName("!=")
+                || opName == getName(">") || opName == getName("<") || opName == getName("&&") || opName == getName("||") || opName == getName("!")
+                || opName == getName("|") || opName == getName("&") || opName == getName("^") || opName == getName("~") || opName == getName("%") ||
+                opName == getName("?:") || opName == getName("<<") || opName == getName(">>"))
+            {
+                auto result = m_astBuilder->create<FuncCallIntVal>();
+                result->args.addRange(argVals, argCount);
+                result->funcDeclRef = funcDeclRef;
+                result->funcType = as<Type>(funcDeclRefExpr.getExpr()->type->substitute(
+                    m_astBuilder, funcDeclRefExpr.getSubsts()));
+                SLANG_RELEASE_ASSERT(result->funcType);
+                return result;
+            }
             return nullptr;
         }
 
         // At this point, all the operands had simple integer values, so we are golden.
         IntegerLiteralValue resultValue = 0;
-        auto opName = funcDeclRef.getName();
-
-        // handle binary operators
-        if (opName == getName("-"))
+        // If this is an implicit cast, we can try to fold.
+        if (implicitCast)
         {
-            if (argCount == 1)
+            auto targetBasicType = as<BasicExpressionType>(invokeExpr.getExpr()->type.type);
+            if (!targetBasicType)
+                return nullptr;
+            switch (targetBasicType->baseType)
             {
-                resultValue = -constArgVals[0];
-            }
-            else if (argCount == 2)
-            {
-                resultValue = constArgVals[0] - constArgVals[1];
+            case BaseType::Bool:
+                resultValue = constArgVals[0] != 0;
+                break;
+            case BaseType::Int:
+            case BaseType::UInt:
+            case BaseType::UInt16:
+            case BaseType::Int16:
+            case BaseType::UInt8:
+            case BaseType::Int8:
+                resultValue = constArgVals[0];
+                break;
+            default:
+                return nullptr;
             }
         }
-
-        // simple binary operators
-#define CASE(OP)                                                    \
-        else if(opName == getName(#OP)) do {                    \
-            if(argCount != 2) return nullptr;                   \
-            resultValue = constArgVals[0] OP constArgVals[1];   \
-        } while(0)
-
-        CASE(+); // TODO: this can also be unary...
-        CASE(*);
-        CASE(<<);
-        CASE(>>);
-        CASE(&);
-        CASE(|);
-        CASE(^);
-#undef CASE
-
-        // binary operators with chance of divide-by-zero
-        // TODO: issue a suitable error in that case
-#define CASE(OP)                                                    \
-        else if(opName == getName(#OP)) do {                    \
-            if(argCount != 2) return nullptr;                   \
-            if(!constArgVals[1]) return nullptr;                \
-            resultValue = constArgVals[0] OP constArgVals[1];   \
-        } while(0)
-
-        CASE(/);
-        CASE(%);
-#undef CASE
-
-        // TODO(tfoley): more cases
         else
         {
-            return nullptr;
+            auto opName = funcDeclRef.getName();
+
+            // handle binary operators
+            if (opName == getName("-"))
+            {
+                if (argCount == 1)
+                {
+                    resultValue = -constArgVals[0];
+                }
+                else if (argCount == 2)
+                {
+                    resultValue = constArgVals[0] - constArgVals[1];
+                }
+            }
+            else if (opName == getName("!"))
+            {
+                resultValue = constArgVals[0] != 0;
+            }
+            else if (opName == getName("~"))
+            {
+                resultValue = ~constArgVals[0];
+            }
+
+            // simple binary operators
+#define CASE(OP)                                                    \
+            else if(opName == getName(#OP)) do {                    \
+                if(argCount != 2) return nullptr;                   \
+                resultValue = constArgVals[0] OP constArgVals[1];   \
+            } while(0)
+
+            CASE(+); // TODO: this can also be unary...
+            CASE(*);
+            CASE(<<);
+            CASE(>>);
+            CASE(&);
+            CASE(|);
+            CASE(^);
+            CASE(!=);
+            CASE(==);
+            CASE(>=);
+            CASE(<=);
+            CASE(<);
+            CASE(>);
+#undef CASE
+            // binary operators with chance of divide-by-zero
+            // TODO: issue a suitable error in that case
+#define CASE(OP)                                                    \
+            else if(opName == getName(#OP)) do {                    \
+                if(argCount != 2) return nullptr;                   \
+                if(!constArgVals[1]) return nullptr;                \
+                resultValue = constArgVals[0] OP constArgVals[1];   \
+            } while(0)
+            CASE(/);
+            CASE(%);
+#undef CASE
+            else if (opName == getName("?:"))
+            {
+                if (argCount != 3)
+                    return nullptr;
+                if (constArgVals[0] != 0)
+                    resultValue = constArgVals[1];
+                else
+                    resultValue = constArgVals[2];
+            }
+            // TODO(tfoley): more cases
+            else
+            {
+                return nullptr;
+            }
         }
 
         IntVal* result = m_astBuilder->create<ConstantIntVal>(resultValue);
@@ -1011,6 +1131,22 @@ namespace Slang
         if(!decl->hasModifier<ConstModifier>())
             return nullptr;
 
+        if (isInterfaceRequirement(decl))
+        {
+            for (auto subst = declRef.substitutions.substitutions; subst; subst = subst->outer)
+            {
+                if (auto thisTypeSubst = as<ThisTypeSubstitution>(subst))
+                {
+                    auto val = WitnessLookupIntVal::tryFold(
+                        m_astBuilder,
+                        thisTypeSubst->witness,
+                        decl,
+                        declRef.substitute(m_astBuilder, decl->type.type));
+                    return as<IntVal>(val);
+                }
+            }
+        }
+
         auto initExpr = getInitExpr(m_astBuilder, declRef);
         if(!initExpr)
             return nullptr;
@@ -1051,7 +1187,9 @@ namespace Slang
             if (auto genericValParamRef = declRef.as<GenericValueParamDecl>())
             {
                 // TODO(tfoley): handle the case of non-`int` value parameters...
-                return m_astBuilder->create<GenericParamIntVal>(genericValParamRef);
+                Val* valResult = m_astBuilder->create<GenericParamIntVal>(genericValParamRef);
+                valResult = valResult->substitute(m_astBuilder, expr.getSubsts());
+                return as<IntVal>(valResult);
             }
 
             // We may also need to check for references to variables that
@@ -1105,13 +1243,27 @@ namespace Slang
         return tryConstantFoldExpr(expr, circularityInfo);
     }
 
-    IntVal* SemanticsVisitor::CheckIntegerConstantExpression(Expr* inExpr, DiagnosticSink* sink)
+    IntVal* SemanticsVisitor::CheckIntegerConstantExpression(Expr* inExpr, IntegerConstantExpressionCoercionType coercionType, Type* expectedType, DiagnosticSink* sink)
     {
         // No need to issue further errors if the expression didn't even type-check.
         if(IsErrorExpr(inExpr)) return nullptr;
 
         // First coerce the expression to the expected type
-        auto expr = coerce(m_astBuilder->getIntType(),inExpr);
+        Expr* expr = nullptr;
+        switch (coercionType)
+        {
+        case IntegerConstantExpressionCoercionType::SpecificType:
+            expr = coerce(expectedType, inExpr);
+            break;
+        case IntegerConstantExpressionCoercionType::AnyInteger:
+            if (isScalarIntegerType(inExpr->type))
+                expr = inExpr;
+            else
+                expr = coerce(m_astBuilder->getIntType(), inExpr);
+            break;
+        default:
+            break;
+        }
 
         // No need to issue further errors if the type coercion failed.
         if(IsErrorExpr(expr)) return nullptr;
@@ -1124,9 +1276,9 @@ namespace Slang
         return result;
     }
 
-    IntVal* SemanticsVisitor::CheckIntegerConstantExpression(Expr* inExpr)
+    IntVal* SemanticsVisitor::CheckIntegerConstantExpression(Expr* inExpr, IntegerConstantExpressionCoercionType coercionType, Type* expectedType)
     {
-        return CheckIntegerConstantExpression(inExpr, getSink());
+        return CheckIntegerConstantExpression(inExpr, coercionType, expectedType, getSink());
     }
 
     IntVal* SemanticsVisitor::CheckEnumConstantExpression(Expr* expr)
@@ -1197,7 +1349,7 @@ namespace Slang
             IntVal* elementCount = nullptr;
             if (indexExpr)
             {
-                elementCount = CheckIntegerConstantExpression(indexExpr);
+                elementCount = CheckIntegerConstantExpression(indexExpr, IntegerConstantExpressionCoercionType::AnyInteger, nullptr);
             }
 
             auto elementType = CoerceToUsableType(TypeExp(baseExpr, baseTypeType->type));
@@ -1243,7 +1395,9 @@ namespace Slang
                 m_astBuilder,
                 this,
                 name,
-                baseType);
+                baseType,
+                LookupMask::Default,
+                LookupOptions::NoDeref);
             if (!lookupResult.isValid())
             {
                 goto fail;
@@ -1329,8 +1483,8 @@ namespace Slang
     Expr* SemanticsVisitor::checkAssignWithCheckedOperands(AssignExpr* expr)
     {
         auto type = expr->left->type;
-
-        expr->right = coerce(type, expr->right);
+        auto right = maybeOpenRef(expr->right);
+        expr->right = coerce(type, right);
 
         if (!type.isLeftValue)
         {
@@ -1509,49 +1663,42 @@ namespace Slang
         return expr;
     }
 
-    // This function proceses primal params (i.e params of the inner function that is being 
-    // differentiated) that need to be carried over to the function signature for the JVP 
-    // function. (eg. out types can be discarded)
-    //
-    Type* primalToInputType(ASTBuilder*, Type* primalType)
+
+    Type* SemanticsVisitor::_toDifferentialParamType(ASTBuilder* builder, Type* primalType)
     {
+        // Check for type modifiers like 'out' and 'inout'. We need to differentiate the
+        // nested type.
+        //
         if (auto primalOutType = as<OutType>(primalType))
-            return nullptr;
-        else if (auto primalInOutType = as<InOutType>(primalType))
-            return primalInOutType->getValueType();
-
-        return primalType;
-    }
-
-    Type* primalToJVPParamType(ASTBuilder* builder, Type* primalType)
-    {
-        // Only float and float3 types can be differentiated for now.
-        
-        if (primalType->equals(builder->getFloatType()))
-            return primalType;
-        else if (auto primalVectorType = as<VectorExpressionType>(primalType))
         {
-            // TODO(sai): There's probably a more elegant way to check if a type is a float3?
-            if (getIntVal(primalVectorType->elementCount) == 3 && primalVectorType->elementType->equals(builder->getFloatType()))
-                return primalVectorType;
-        }
-        else if (auto primalOutType = as<OutType>(primalType))
-        {
-            return builder->getOutType(primalToJVPParamType(builder, primalOutType->getValueType()));
+            return builder->getOutType(_toDifferentialParamType(builder, primalOutType->getValueType()));
         }
         else if (auto primalInOutType = as<InOutType>(primalType))
         {
-            return builder->getInOutType(primalToJVPParamType(builder, primalInOutType->getValueType()));
+            return builder->getInOutType(_toDifferentialParamType(builder, primalInOutType->getValueType()));
         }
-        return nullptr;
-    }
 
-    Type* primalToJVPReturnType(ASTBuilder* builder, Type* primalType)
-    {
-        if(auto jvpType = primalToJVPParamType(builder, primalType))
-            return jvpType;
+        // Get a reference to the builtin 'IDifferentiable' interface
+        auto differentiableInterface = builder->getDifferentiableInterface();
+
+        // Check if the provided type inherits from IDifferentiable.
+        // If not, return the original type.
+        if (auto conformanceWitness = as<Witness>(tryGetInterfaceConformanceWitness(primalType, differentiableInterface)))
+            return builder->getDifferentialPairType(primalType, conformanceWitness);
         else
-            return builder->getVoidType();
+            return primalType;
+        
+    }
+
+    Type* SemanticsVisitor::_toJVPReturnType(ASTBuilder* builder, Type* primalType)
+    {
+        if (auto conformanceWitness = 
+            as<Witness>(tryGetInterfaceConformanceWitness(
+                primalType,
+                builder->getDifferentiableInterface())))
+            return builder->getDifferentialPairType(primalType, conformanceWitness);
+        else
+            return primalType;
     }
 
     Expr* SemanticsExprVisitor::visitJVPDifferentiateExpr(JVPDifferentiateExpr* expr)
@@ -1572,7 +1719,7 @@ namespace Slang
             // The JVP return type is float if primal return type is float
             // void otherwise.
             //
-            jvpType->resultType = primalToJVPReturnType(astBuilder, primalType->getResultType());
+            jvpType->resultType = _toJVPReturnType(astBuilder, primalType->getResultType());
             
             // No support for differentiating function that throw errors, for now.
             SLANG_ASSERT(primalType->errorType->equals(astBuilder->getBottomType()));
@@ -1580,13 +1727,7 @@ namespace Slang
 
             for (UInt i = 0; i < primalType->getParamCount(); i++)
             {
-                if(auto primalInputType = primalToInputType(astBuilder, primalType->getParamType(i)))
-                    jvpType->paramTypes.add(primalInputType);
-            }
-
-            for (UInt i = 0; i < primalType->getParamCount(); i++)
-            {
-                if(auto jvpParamType = primalToJVPParamType(astBuilder, primalType->getParamType(i)))
+                if(auto jvpParamType = _toDifferentialParamType(astBuilder, primalType->getParamType(i)))
                     jvpType->paramTypes.add(jvpParamType);
             }
 
@@ -1746,6 +1887,95 @@ namespace Slang
             }
         }
         getSink()->diagnose(expr, Diagnostics::calleeOfTryCallMustBeFunc);
+        return expr;
+    }
+
+    Expr* SemanticsExprVisitor::visitIsTypeExpr(IsTypeExpr* expr)
+    {
+        expr->typeExpr = CheckProperType(expr->typeExpr);
+        auto originalVal = CheckTerm(expr->value);
+        expr->type = m_astBuilder->getBoolType();
+        expr->value = originalVal;
+
+        // If value is a subtype of `type`, then this expr is always true.
+        if (isDeclaredSubtype(expr->value->type.type, expr->typeExpr.type))
+        {
+            // Instead of returning a BoolLiteralExpr, we use a field to indicate this scenario,
+            // so that the language server can still see the original syntax tree.
+            expr->constantVal = m_astBuilder->create<BoolLiteralExpr>();
+            expr->constantVal->type = m_astBuilder->getBoolType();
+            expr->constantVal->value = true;
+            expr->constantVal->loc = expr->loc;
+            return expr;
+        }
+
+        // Otherwise, we need to ensure the target type is a subtype of value->type.
+
+        expr->value = maybeOpenExistential(originalVal);
+        expr->witnessArg = tryGetSubtypeWitness(expr->typeExpr.type, originalVal->type.type);
+        if (expr->witnessArg)
+        {
+            // For now we can only support the scenario where `expr->value` is an interface type.
+            if (!isInterfaceType(originalVal->type))
+            {
+                getSink()->diagnose(expr, Diagnostics::isOperatorValueMustBeInterfaceType);
+            }
+            return expr;
+        }
+
+        if (!as<ErrorType>(expr->typeExpr.type) && !as<ErrorType>(expr->value->type.type))
+        {
+            // The type is not in the same hierarchy, so we evaluate to false.
+            expr->constantVal = m_astBuilder->create<BoolLiteralExpr>();
+            expr->constantVal->type = m_astBuilder->getBoolType();
+            expr->constantVal->value = false;
+            expr->constantVal->loc = expr->loc;
+        }
+        return expr;
+    }
+
+    Expr* SemanticsExprVisitor::visitAsTypeExpr(AsTypeExpr* expr)
+    {
+        TypeExp typeExpr;
+        typeExpr.exp = expr->typeExpr;
+        typeExpr = CheckProperType(typeExpr);
+        expr->value = CheckTerm(expr->value);
+        auto optType = m_astBuilder->getOptionalType(typeExpr.type);
+        expr->type = optType;
+
+        // If value is a subtype of `type`, then this expr is equivalent to a CastToSuperTypeExpr.
+        if (auto witness = tryGetSubtypeWitness(expr->value->type.type, typeExpr.type))
+        {
+            auto castToSuperType = createCastToSuperTypeExpr(typeExpr.type, expr->value, witness);
+            auto makeOptional = m_astBuilder->create<MakeOptionalExpr>();
+            makeOptional->loc = expr->loc;
+            makeOptional->type = optType;
+            makeOptional->value = castToSuperType;
+            makeOptional->typeExpr = typeExpr.exp;
+            return makeOptional;
+        }
+
+        // For now we can only support the scenario where `expr->value` is an interface type.
+        if (!isInterfaceType(expr->value->type))
+        {
+            getSink()->diagnose(expr, Diagnostics::isOperatorValueMustBeInterfaceType);
+        }
+
+        expr->typeExpr = typeExpr.exp;
+        expr->witnessArg = tryGetSubtypeWitness(typeExpr.type, expr->value->type.type);
+        if (expr->witnessArg)
+        {
+            expr->value = maybeOpenExistential(expr->value);
+            return expr;
+        }
+
+        if (!as<ErrorType>(typeExpr.type) && !as<ErrorType>(expr->value->type.type))
+        {
+            getSink()->diagnose(expr, Diagnostics::typeNotInTheSameHierarchy, expr->value->type.type, typeExpr.type);
+        }
+
+        expr->type = m_astBuilder->getErrorType();
+        
         return expr;
     }
 
@@ -2512,6 +2742,16 @@ namespace Slang
         auto andType = m_astBuilder->getAndType(expr->left.type, expr->right.type);
         expr->type = m_astBuilder->getTypeType(andType);
 
+        return expr;
+    }
+
+    Expr* SemanticsExprVisitor::visitPointerTypeExpr(PointerTypeExpr* expr)
+    {
+        expr->base = CheckProperType(expr->base);
+        if (as<ErrorType>(expr->base.type))
+            expr->type = expr->base.type;
+        auto ptrType = m_astBuilder->getPtrType(expr->base.type);
+        expr->type = m_astBuilder->getTypeType(ptrType);
         return expr;
     }
 

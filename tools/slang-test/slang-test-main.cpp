@@ -33,6 +33,8 @@
 #include "../../source/compiler-core/slang-nvrtc-compiler.h"
 #include "../../source/compiler-core/slang-language-server-protocol.h"
 
+#include "../../source/compiler-core/slang-artifact-associated-impl.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "external/stb/stb_image.h"
 
@@ -1347,7 +1349,7 @@ TestResult runDocTest(TestContext* context, TestInput& input)
 
 TestResult runExecutableTest(TestContext* context, TestInput& input)
 {
-    DownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
+    IDownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
     if (!compiler)
     {
         return TestResult::Ignored;
@@ -1367,11 +1369,11 @@ TestResult runExecutableTest(TestContext* context, TestInput& input)
     String actualOutputPath = outputStem + ".actual";
     File::remove(actualOutputPath);
 
-    // Make the module name the same as the source file
-    String ext = Path::getPathExt(filePath);
-    String modulePath = _calcModulePath(input);
+    // Make the module name the same as the current executable path, so it can discover
+    // the slang-rt library if needed.
+    String modulePath = Path::combine(
+        Path::getParentDirectory(Path::getExecutablePath()), Path::getFileNameWithoutExt(filePath));
 
-    // Remove the binary..
     String moduleExePath;
     {
         StringBuilder buf;
@@ -1409,7 +1411,12 @@ TestResult runExecutableTest(TestContext* context, TestInput& input)
         }
     }
     ExecuteResult exeRes;
-    TEST_RETURN_ON_DONE(spawnAndWait(context, outputStem, input.spawnType, cmdLine, exeRes));
+
+    // TODO(Yong) HACK:
+    // Just use shared library now, TestServer spawn mode seems to cause slangc to fail to find its own
+    // executable path, and thus failed to find the `gfx.slang` file sitting along side `slangc.exe`.
+    // We need to figure out what happened to `Path::getExecutablePath()` inside test-server.
+    TEST_RETURN_ON_DONE(spawnAndWait(context, outputStem, SpawnType::UseSharedLibrary, cmdLine, exeRes));
 
     String actualOutput;
 
@@ -1899,8 +1906,8 @@ TestResult runSimpleLineTest(TestContext* context, TestInput& input)
     }
 
     // Parse all the diagnostics so we can extract line numbers
-    List<DownstreamDiagnostic> diagnostics;
-    if (SLANG_FAILED(ParseDiagnosticUtil::parseDiagnostics(exeRes.standardError.getUnownedSlice(), diagnostics)) || diagnostics.getCount() <= 0)
+    auto diagnostics = ArtifactDiagnostics::create();
+    if (SLANG_FAILED(ParseDiagnosticUtil::parseDiagnostics(exeRes.standardError.getUnownedSlice(), diagnostics)) || diagnostics->getCount() <= 0)
     {
         // Write out the diagnostics which couldn't be parsed.
 
@@ -1912,9 +1919,9 @@ TestResult runSimpleLineTest(TestContext* context, TestInput& input)
 
     StringBuilder actualOutput;
 
-    if (diagnostics.getCount() > 0)
+    if (diagnostics->getCount() > 0)
     {
-        actualOutput << diagnostics[0].fileLine << "\n";
+        actualOutput << diagnostics->getAt(0)->location.line << "\n";
     }
     else
     {
@@ -2131,23 +2138,23 @@ String getExpectedOutput(String const& outputStem)
     return expectedOutput;
 }
 
-static String _calcSummary(const DownstreamDiagnostics& inOutput)
+static String _calcSummary(IArtifactDiagnostics* inDiagnostics)
 {
-    DownstreamDiagnostics output(inOutput);
-
+    auto diagnostics = cloneInterface(inDiagnostics);
+    
     // We only want to analyze errors for now
-    output.removeBySeverity(DownstreamDiagnostic::Severity::Info);
-    output.removeBySeverity(DownstreamDiagnostic::Severity::Warning);
+    diagnostics->removeBySeverity(ArtifactDiagnostic::Severity::Info);
+    diagnostics->removeBySeverity(ArtifactDiagnostic::Severity::Warning);
 
-    StringBuilder builder;
+    ComPtr<ISlangBlob> summary;
+    diagnostics->calcSimplifiedSummary(summary.writeRef());
 
-    output.appendSimplifiedSummary(builder);
-    return builder;
+    return StringUtil::getString(summary);
 }
 
 static TestResult runCPPCompilerCompile(TestContext* context, TestInput& input)
 {
-    DownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
+    IDownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
     if (!compiler)
     {
         return TestResult::Ignored;
@@ -2189,7 +2196,7 @@ static TestResult runCPPCompilerCompile(TestContext* context, TestInput& input)
 
 static TestResult runCPPCompilerSharedLibrary(TestContext* context, TestInput& input)
 {
-    DownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
+    IDownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
     if (!compiler)
     {
         std::lock_guard<std::mutex> lock(context->mutex);
@@ -2218,7 +2225,7 @@ static TestResult runCPPCompilerSharedLibrary(TestContext* context, TestInput& i
     File::remove(sharedLibraryPath);
 
     // Set up the compilation options
-    DownstreamCompiler::CompileOptions options;
+    DownstreamCompileOptions options;
 
     options.sourceLanguage = (ext == "c") ? SLANG_SOURCE_LANGUAGE_C : SLANG_SOURCE_LANGUAGE_CPP;
 
@@ -2231,15 +2238,15 @@ static TestResult runCPPCompilerSharedLibrary(TestContext* context, TestInput& i
 
     options.includePaths.add(".");
 
-    RefPtr<DownstreamCompileResult> compileResult;
-    if (SLANG_FAILED(compiler->compile(options, compileResult)))
+    ComPtr<IArtifact> artifact;
+    if (SLANG_FAILED(compiler->compile(options, artifact.writeRef())))
     {
         return TestResult::Fail;
     }
 
-    const auto& diagnostics = compileResult->getDiagnostics();
+    auto diagnostics = findAssociated<IArtifactDiagnostics>(artifact);
 
-    if (SLANG_FAILED(diagnostics.result))
+    if (diagnostics && SLANG_FAILED(diagnostics->getResult()))
     {
         // Compilation failed
         String actualOutput = _calcSummary(diagnostics);
@@ -2303,7 +2310,7 @@ static TestResult runCPPCompilerSharedLibrary(TestContext* context, TestInput& i
 
 static TestResult runCPPCompilerExecute(TestContext* context, TestInput& input)
 {
-    DownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
+    IDownstreamCompiler* compiler = context->getDefaultCompiler(SLANG_SOURCE_LANGUAGE_CPP);
     if (!compiler)
     {
         return TestResult::Ignored;
@@ -2340,7 +2347,7 @@ static TestResult runCPPCompilerExecute(TestContext* context, TestInput& input)
     File::remove(moduleExePath);
 
     // Set up the compilation options
-    DownstreamCompiler::CompileOptions options;
+    DownstreamCompileOptions options;
 
     options.sourceLanguage = (ext == "c") ? SLANG_SOURCE_LANGUAGE_C : SLANG_SOURCE_LANGUAGE_CPP;
 
@@ -2348,18 +2355,18 @@ static TestResult runCPPCompilerExecute(TestContext* context, TestInput& input)
     options.sourceFiles.add(filePath);
     options.modulePath = modulePath;
 
-    RefPtr<DownstreamCompileResult> compileResult;
-    if (SLANG_FAILED(compiler->compile(options, compileResult)))
+    ComPtr<IArtifact> artifact;
+    if (SLANG_FAILED(compiler->compile(options, artifact.writeRef())))
     {
         return TestResult::Fail;
     }
 
     String actualOutput;
 
-    const auto& diagnostics = compileResult->getDiagnostics();
+    auto diagnostics = findAssociated<IArtifactDiagnostics>(artifact);
 
     // If the actual compilation failed, then the output will be the summary
-    if (SLANG_FAILED(diagnostics.result))
+    if (diagnostics && SLANG_FAILED(diagnostics->getResult()))
     {
         actualOutput = _calcSummary(diagnostics);
     }
@@ -4108,7 +4115,13 @@ SlangResult innerMain(int argc, char** argv)
 #endif
 
 #if SLANG_UNIX_FAMILY
-    auto unixCatagory = categorySet.add("unix", fullTestCategory);
+    auto unixCategory = categorySet.add("unix", fullTestCategory);
+#endif
+
+#if SLANG_PTR_IS_64
+    auto ptr64Category = categorySet.add("64-bit", fullTestCategory);
+#else
+    auto ptr32Category = categorySet.add("32-bit", fullTestCategory);
 #endif
 
     // An un-categorized test will always belong to the `full` category

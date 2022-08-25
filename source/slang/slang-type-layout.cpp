@@ -4,7 +4,7 @@
 #include "slang-syntax.h"
 #include "slang-ir-insts.h"
 
-#include "../compiler-core/slang-artifact-info.h"
+#include "../compiler-core/slang-artifact-desc-util.h"
 
 #include <assert.h>
 
@@ -1479,6 +1479,18 @@ static LayoutSize GetElementCount(IntVal* val)
         //
         return 0;
     }
+    else if (auto polyIntVal = as<PolynomialIntVal>(val))
+    {
+        // TODO: We want to treat the case where the number of
+        // elements in an array depends on a generic parameter
+        // much like the case where the number of elements is
+        // unbounded, *but* we can't just blindly do that because
+        // an API might disallow unbounded arrays in various
+        // cases where a generic bound might work (because
+        // any concrete specialization will have a finite bound...)
+        //
+        return 0;
+    }
     SLANG_UNEXPECTED("unhandled integer literal kind");
     UNREACHABLE_RETURN(LayoutSize(0));
 }
@@ -1606,7 +1618,7 @@ bool isKhronosTarget(TargetRequest* targetReq)
 
 bool isCPUTarget(TargetRequest* targetReq)
 {
-    return ArtifactInfoUtil::isCpuTarget(ArtifactDesc::makeFromCompileTarget(asExternal(targetReq->getTarget())));
+    return ArtifactDescUtil::isCpuLikeTarget(ArtifactDescUtil::makeDescForCompileTarget(asExternal(targetReq->getTarget())));
 }
 
 bool isCUDATarget(TargetRequest* targetReq)

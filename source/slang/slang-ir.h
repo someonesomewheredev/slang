@@ -203,6 +203,36 @@ struct IRInstList : IRInstListBase
     Iterator end();
 };
 
+template<typename T>
+struct IRFilteredInstList : IRInstListBase
+{
+    IRFilteredInstList() {}
+
+    IRFilteredInstList(IRInst* fst, IRInst* lst);
+
+    explicit IRFilteredInstList(IRInstListBase const& list)
+        : IRFilteredInstList(list.first, list.last)
+    {}
+
+    T* getFirst() { return (T*)first; }
+    T* getLast() { return (T*)last; }
+
+    struct Iterator : public IRInstListBase::Iterator
+    {
+        IRInst* exclusiveLast;
+        Iterator() {}
+        Iterator(IRInst* inst, IRInst* lastIter) : IRInstListBase::Iterator(inst), exclusiveLast(lastIter) {}
+        void operator++();
+        T* operator*()
+        {
+            return (T*)inst;
+        }
+    };
+
+    Iterator begin();
+    Iterator end();
+};
+
     /// A list of contiguous operands that can be iterated over as `IRInst`s.
 struct IROperandListBase
 {
@@ -741,6 +771,41 @@ typename IRInstList<T>::Iterator IRInstList<T>::end()
     return Iterator(last ? last->next : nullptr);
 }
 
+template<typename T>
+IRFilteredInstList<T>::IRFilteredInstList(IRInst* fst, IRInst* lst)
+{
+    first = fst;
+    last = lst;
+
+    auto lastIter = last ? last->next : nullptr;
+    while (first != lastIter && !as<T>(first))
+        first = first->next;
+    while (last && last != first && !as<T>(last))
+        last = last->prev;
+}
+
+template<typename T>
+void IRFilteredInstList<T>::Iterator::operator++()
+{
+    inst = inst->next;
+    while (inst != exclusiveLast && !as<T>(inst))
+    {
+        inst = inst->next;
+    }
+}
+template<typename T>
+typename IRFilteredInstList<T>::Iterator IRFilteredInstList<T>::begin()
+{
+    auto lastIter = last ? last->next : nullptr;
+    return IRFilteredInstList<T>::Iterator(first, lastIter);
+}
+
+template<typename T>
+typename IRFilteredInstList<T>::Iterator IRFilteredInstList<T>::end()
+{
+    auto lastIter = last ? last->next : nullptr;
+    return IRFilteredInstList<T>::Iterator(lastIter, lastIter);
+}
 
 // Types
 
@@ -1255,6 +1320,13 @@ SIMPLE_IR_TYPE(TypeKind, Kind);
 //
 SIMPLE_IR_TYPE(GenericKind, Kind)
 
+struct IRDifferentialPairType : IRType
+{
+    IRType* getValueType() { return (IRType*)getOperand(0); }
+
+    IR_LEAF_ISA(DifferentialPairType)
+};
+
 struct IRVectorType : IRType
 {
     IRType* getElementType() { return (IRType*)getOperand(0); }
@@ -1299,8 +1371,17 @@ SIMPLE_IR_PARENT_TYPE(OutTypeBase, PtrTypeBase)
 SIMPLE_IR_TYPE(OutType, OutTypeBase)
 SIMPLE_IR_TYPE(InOutType, OutTypeBase)
 
-SIMPLE_IR_TYPE(ComPtrType, Type)
-SIMPLE_IR_TYPE(NativePtrType, Type)
+struct IRComPtrType : public IRType
+{
+    IR_LEAF_ISA(ComPtrType);
+    IRType* getValueType() { return (IRType*)getOperand(0); }
+};
+
+struct IRNativePtrType : public IRType
+{
+    IR_LEAF_ISA(NativePtrType);
+    IRType* getValueType() { return (IRType*)getOperand(0); }
+};
 
 struct IRPseudoPtrType : public IRPtrTypeBase
 {
@@ -1403,14 +1484,14 @@ struct IRStructField : IRInst
 //
 struct IRStructType : IRType
 {
-    IRInstList<IRStructField> getFields() { return IRInstList<IRStructField>(getChildren()); }
+    IRFilteredInstList<IRStructField> getFields() { return IRFilteredInstList<IRStructField>(getChildren()); }
 
     IR_LEAF_ISA(StructType)
 };
 
 struct IRClassType : IRType
 {
-    IRInstList<IRStructField> getFields() { return IRInstList<IRStructField>(getChildren()); }
+    IRFilteredInstList<IRStructField> getFields() { return IRFilteredInstList<IRStructField>(getChildren()); }
 
     IR_LEAF_ISA(ClassType)
 };
@@ -1479,6 +1560,14 @@ struct IRResultType : IRType
 
     IRType* getValueType() { return (IRType*)getOperand(0); }
     IRType* getErrorType() { return (IRType*)getOperand(1); }
+};
+
+/// Represents an `Optional<T>`.
+struct IROptionalType : IRType
+{
+    IR_LEAF_ISA(OptionalType)
+
+    IRType* getValueType() { return (IRType*)getOperand(0); }
 };
 
 struct IRTypeType : IRType

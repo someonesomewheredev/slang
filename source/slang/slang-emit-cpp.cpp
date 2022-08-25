@@ -8,6 +8,8 @@
 
 #include "slang-ir-clone.h"
 
+#include "../compiler-core/slang-artifact-desc-util.h"
+
 #include <assert.h>
 
 /*
@@ -1653,7 +1655,7 @@ CPPSourceEmitter::CPPSourceEmitter(const Desc& desc):
     //m_semanticUsedFlags = SemanticUsedFlag::GroupID | SemanticUsedFlag::GroupThreadID | SemanticUsedFlag::DispatchThreadID;
 
     
-    const auto artifactDesc = ArtifactDesc::makeFromCompileTarget(asExternal(getTarget()));
+    const auto artifactDesc = ArtifactDescUtil::makeDescForCompileTarget(asExternal(getTarget()));
 
     // If we have runtime library we can convert to a terminated string slice    
     m_hasString = (artifactDesc.style == ArtifactStyle::Host);
@@ -1677,7 +1679,11 @@ void CPPSourceEmitter::emitWitnessTable(IRWitnessTable* witnessTable)
     if (isBuiltin(interfaceType))
         return;
 
-    auto witnessTableItems = witnessTable->getChildren();
+    if (interfaceType->findDecoration<IRComInterfaceDecoration>())
+    {
+        pendingWitnessTableDefinitions.add(witnessTable);
+        return;
+    }
 
     // Declare a global variable for the witness table.
     m_writer->emit("extern \"C\" { ");
@@ -1701,6 +1707,11 @@ void CPPSourceEmitter::_emitWitnessTableDefinitions()
     for (auto witnessTable : pendingWitnessTableDefinitions)
     {
         auto interfaceType = cast<IRInterfaceType>(witnessTable->getConformanceType());
+        if (interfaceType->findDecoration<IRComInterfaceDecoration>())
+        {
+            emitComWitnessTable(witnessTable);
+            continue;
+        }
         List<IRWitnessTableEntry*> sortedWitnessTableEntries = getSortedWitnessTableEntries(witnessTable);
         m_writer->emit("extern \"C\"\n{\n");
         m_writer->indent();
@@ -1750,6 +1761,12 @@ void CPPSourceEmitter::_emitWitnessTableDefinitions()
 
 void CPPSourceEmitter::emitComInterface(IRInterfaceType* interfaceType)
 {
+    auto comDecoration = interfaceType->findDecoration<IRComInterfaceDecoration>();
+    auto guidInst = as<IRStringLit>(comDecoration->getOperand(0));
+    SLANG_RELEASE_ASSERT(guidInst);
+    auto guid = guidInst->getStringSlice();
+    SLANG_RELEASE_ASSERT(guid.getLength() == 32);
+
     m_writer->emit("struct ");
     emitSimpleType(interfaceType);
     m_writer->emit(" : ");
@@ -1758,7 +1775,7 @@ void CPPSourceEmitter::emitComInterface(IRInterfaceType* interfaceType)
     for (UInt i = 0; i < interfaceType->getOperandCount(); i++)
     {
         auto entry = as<IRInterfaceRequirementEntry>(interfaceType->getOperand(i));
-        if (auto witnessTableType = as<IRWitnessTableType>(entry->getRequirementVal()))
+        if (auto witnessTableType = as<IRWitnessTableTypeBase>(entry->getRequirementVal()))
         {
             if (isFirst)
             {
@@ -1779,6 +1796,23 @@ void CPPSourceEmitter::emitComInterface(IRInterfaceType* interfaceType)
     // Emit methods.
     m_writer->emit("\n{\n");
     m_writer->indent();
+    // Emit GUID.
+    m_writer->emit("SLANG_COM_INTERFACE(0x");
+    m_writer->emit(guid.subString(0, 8));
+    m_writer->emit(", 0x");
+    m_writer->emit(guid.subString(8, 4));
+    m_writer->emit(", 0x");
+    m_writer->emit(guid.subString(12, 4));
+    m_writer->emit(", { ");
+    for (UInt i = 0; i < 8; i++)
+    {
+        if (i > 0)
+            m_writer->emit(", ");
+        m_writer->emit("0x");
+        m_writer->emit(guid.subString(16 + i * 2, 2));
+    }
+    m_writer->emit(" })\n");
+
     for (UInt i = 0; i < interfaceType->getOperandCount(); i++)
     {
         auto entry = as<IRInterfaceRequirementEntry>(interfaceType->getOperand(i));
@@ -2476,6 +2510,33 @@ bool CPPSourceEmitter::tryEmitInstExprImpl(IRInst* inst, const EmitOpInfo& inOut
             }
             return true;
         }
+        case kIROp_MakeExistential:
+        case kIROp_MakeExistentialWithRTTI:
+        {
+            auto rsType = cast<IRComPtrType>(inst->getDataType());
+            m_writer->emit("ComPtr<");
+            m_writer->emit(getName(rsType->getOperand(0)));
+            m_writer->emit(">(");
+            m_writer->emit("static_cast<");
+            m_writer->emit(getName(rsType->getOperand(0)));
+            m_writer->emit("*>(");
+            auto prec = getInfo(EmitOp::Postfix);
+            emitOperand(inst->getOperand(0), leftSide(getInfo(EmitOp::General), prec));
+            m_writer->emit(".Ptr()");
+            m_writer->emit("))");
+            return true;
+        }
+        case kIROp_GetValueFromBoundInterface:
+        {
+            m_writer->emit("static_cast<");
+            m_writer->emit(getName(inst->getFullType()));
+            m_writer->emit("*>(");
+            auto prec = getInfo(EmitOp::Postfix);
+            emitOperand(inst->getOperand(0), leftSide(getInfo(EmitOp::General), prec));
+            m_writer->emit(".get()");
+            m_writer->emit(")");
+            return true;
+        }
     }
 }
 
@@ -2604,9 +2665,10 @@ void CPPSourceEmitter::emitVarDecorationsImpl(IRInst* inst)
     Super::emitVarDecorationsImpl(inst);
 }
 
-
-void CPPSourceEmitter::_maybeEmitExportLike(IRInst* inst)
+void CPPSourceEmitter::_getExportStyle(IRInst* inst, bool& outIsExport, bool& outIsExternC)
 {
+    outIsExport = false;
+    outIsExternC = false;
     // Specially handle export, as we don't want to emit it multiple times
     if (getTargetReq()->isWholeProgramRequest())
     {
@@ -2619,34 +2681,38 @@ void CPPSourceEmitter::_maybeEmitExportLike(IRInst* inst)
             }
         }
 
-        bool isExternC = false;
-        bool isExported = false;
-
         // If public/export made it externally visible
         for (auto decoration : inst->getDecorations())
         {
             const auto op = decoration->getOp();
             if (op == kIROp_ExternCppDecoration)
             {
-                isExternC = true;
+                outIsExternC = true;
             }
             else if (op == kIROp_PublicDecoration ||
                 op == kIROp_HLSLExportDecoration)
             {
-                isExported = true;
+                outIsExport = true;
             }
         }
+    }
+}
 
-        // TODO(JS): Currently export *also* implies it's extern "C" and we can't list twice
-        if (isExported)
-        {
-            m_writer->emit("SLANG_PRELUDE_EXPORT\n");
-        }
-        else if (isExternC)
-        {
-            // It's name is not manged.
-            m_writer->emit("extern \"C\"\n");
-        }
+void CPPSourceEmitter::_maybeEmitExportLike(IRInst* inst)
+{
+    bool isExternC = false;
+    bool isExported = false;
+    _getExportStyle(inst, isExternC, isExported);
+        
+    // TODO(JS): Currently export *also* implies it's extern "C" and we can't list twice
+    if (isExported)
+    {
+        m_writer->emit("SLANG_PRELUDE_EXPORT\n");
+    }
+    else if (isExternC)
+    {
+        // It's name is not manged.
+        m_writer->emit("extern \"C\"\n");
     }
 }
 
@@ -2865,6 +2931,7 @@ void CPPSourceEmitter::_emitForwardDeclarations(const List<EmitAction>& actions)
                     {
                     case kIROp_Func:
                     case kIROp_StructType:
+                    case kIROp_InterfaceType:
                         emitForwardDeclaration(action.inst);
                         break;
                     default:

@@ -129,6 +129,7 @@ DIAGNOSTIC(    94, Error, unableToReadRiff, "unable to read as 'riff'/not a 'rif
 DIAGNOSTIC(    95, Error, unknownLibraryKind, "unknown library kind '$0'")
 DIAGNOSTIC(    96, Error, kindNotLinkable, "not a known linkable kind '$0'")
 DIAGNOSTIC(    97, Error, libraryDoesNotExist, "library '$0' does not exist")
+DIAGNOSTIC(    98, Error, cannotAccessAsBlob, "cannot access as a blob")
 
 //
 // 001xx - Downstream Compilers
@@ -233,7 +234,7 @@ DIAGNOSTIC(20014, Error, classIsReservedKeyword, "'class' is a reserved keyword 
 //
 // 3xxxx - Semantic analysis
 //
-
+DIAGNOSTIC(30002, Error, divideByZero, "divide by zero")
 DIAGNOSTIC(30003, Error, breakOutsideLoop, "'break' must appear inside loop constructs.")
 DIAGNOSTIC(30004, Error, continueOutsideLoop, "'continue' must appear inside loop constructs.")
 DIAGNOSTIC(30005, Error, whilePredicateTypeError, "'while': expression must evaluate to int.")
@@ -250,9 +251,8 @@ DIAGNOSTIC(30012, Error, noOverloadFoundForBinOperatorOnTypes, "no overload foun
 DIAGNOSTIC(30013, Error, subscriptNonArray, "no subscript operation found for  type '$0'")
 DIAGNOSTIC(30014, Error, subscriptIndexNonInteger, "index expression must evaluate to int.")
 DIAGNOSTIC(30015, Error, undefinedIdentifier2, "undefined identifier '$0'.")
-DIAGNOSTIC(30017, Error, componentNotAccessibleFromShader, "component '$0' is not accessible from shader '$1'.")
+DIAGNOSTIC(30018, Error, typeNotInTheSameHierarchy, "invalid use of 'as' operator: expression evaluates to '$0', which is not in the same type hierarchy as target type '$1'.")
 DIAGNOSTIC(30019, Error, typeMismatch, "expected an expression of type '$0', got '$1'")
-DIAGNOSTIC(30020, Error, importOperatorReturnTypeMismatch, "import operator should return '$1', but the expression has type '$0''. do you forget 'project'?")
 DIAGNOSTIC(30021, Error, noApplicationFunction, "$0: no overload takes arguments ($1)")
 DIAGNOSTIC(30022, Error, invalidTypeCast, "invalid type cast between \"$0\" and \"$1\".")
 DIAGNOSTIC(30023, Error, typeHasNoPublicMemberOfName, "\"$0\" does not have public member \"$1\".")
@@ -286,13 +286,14 @@ DIAGNOSTIC(30200, Error, redeclaration, "declaration of '$0' conflicts with exis
 DIAGNOSTIC(30201, Error, functionRedefinition, "function '$0' already has a body")
 DIAGNOSTIC(30202, Error, functionRedeclarationWithDifferentReturnType, "function '$0' declared to return '$1' was previously declared to return '$2'")
 
+DIAGNOSTIC(30300, Error, isOperatorValueMustBeInterfaceType, "'is'/'as' operator requires an interface-typed expression.")
 
 DIAGNOSTIC(33070, Error, expectedFunction, "expected a function, got '$0'")
 DIAGNOSTIC(33071, Error, expectedAStringLiteral, "expected a string literal")
 
 DIAGNOSTIC(   -1, Note, noteExplicitConversionPossible, "explicit conversion from '$0' to '$1' is possible")
 DIAGNOSTIC(30080, Error, ambiguousConversion, "more than one implicit conversion exists from '$0' to '$1'")
-
+DIAGNOSTIC(30081, Warning, unrecommendedImplicitConversion, "implicit conversion from '$0' to '$1' is not recommended")
 DIAGNOSTIC(30090, Error, tryClauseMustApplyToInvokeExpr, "expression in a 'try' clause must be a call to a function or operator overload.")
 DIAGNOSTIC(30091, Error, tryInvokeCalleeShouldThrow, "'$0' called from a 'try' clause does not throw an error, make sure the callee is marked as 'throws'")
 DIAGNOSTIC(30092, Error, calleeOfTryCallMustBeFunc, "callee in a 'try' clause must be a function")
@@ -322,6 +323,10 @@ DIAGNOSTIC(31120, Error, invalidAttributeTarget, "invalid syntax target for user
 DIAGNOSTIC(31121, Error, anyValueSizeExceedsLimit, "'anyValueSize' cannot exceed $0")
 
 DIAGNOSTIC(31122, Error, associatedTypeNotAllowInComInterface, "associatedtype not allowed in a [COM] interface")
+DIAGNOSTIC(31123, Error, invalidGUID, "'$0' is not a valid GUID")
+DIAGNOSTIC(31124, Error, structCannotImplementComInterface, "a struct type cannot implement a [COM] interface")
+DIAGNOSTIC(31124, Error, interfaceInheritingComMustBeCom, "an interface type that inherits from a [COM] interface must itself be a [COM] interface")
+
 
 // Enums
 
@@ -333,6 +338,12 @@ DIAGNOSTIC(32003, Error, unexpectedEnumTagExpr,     "unexpected form for 'enum' 
 // 303xx: interfaces and associated types
 DIAGNOSTIC(30300, Error, assocTypeInInterfaceOnly, "'associatedtype' can only be defined in an 'interface'.")
 DIAGNOSTIC(30301, Error, globalGenParamInGlobalScopeOnly, "'type_param' can only be defined global scope.")
+DIAGNOSTIC(30302, Error, staticConstRequirementMustBeIntOrBool, "'static const' requirement can only have int or bool type.")
+DIAGNOSTIC(30303, Error, valueRequirementMustBeCompileTimeConst, "requirement in the form of a simple value must be declared as 'static const'.")
+
+// Interop
+DIAGNOSTIC(30400, Error, cannotDefinePtrTypeToManagedResource, "pointer to a managed resource is invalid, use `NativeRef<T>` instead")
+
 // TODO: need to assign numbers to all these extra diagnostics...
 DIAGNOSTIC(39999, Fatal, cyclicReference, "cyclic reference '$0'.")
 DIAGNOSTIC(39999, Error, localVariableUsedBeforeDeclared, "local variable '$0' is being used before its declaration.")
@@ -587,6 +598,7 @@ DIAGNOSTIC(52000, Error, multiLevelBreakUnsupported, "control flow appears to re
 DIAGNOSTIC(52001, Warning, dxilNotFound, "dxil shared library not found, so 'dxc' output cannot be signed! Shader code will not be runnable in non-development environments.")
 
 DIAGNOSTIC(52002, Error, passThroughCompilerNotFound, "could not find a suitable pass-through compiler for '$0'.")
+DIAGNOSTIC(52003, Error, cannotDisassemble, "cannot disassemble '$0'.")
 
 DIAGNOSTIC(52004, Error, unableToWriteFile, "unable to write file '$0'")
 DIAGNOSTIC(52005, Error, unableToReadFile, "unable to read file '$0'")

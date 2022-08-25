@@ -5,6 +5,7 @@
 #include "../../slang-com-helper.h"
 #include "../../slang-com-ptr.h"
 
+#include "../core/slang-com-object.h"
 #include "../core/slang-io.h"
 #include "../core/slang-platform.h"
 #include "../core/slang-common.h"
@@ -45,16 +46,15 @@ private:
     static DefaultSharedLibraryLoader s_singleton;
 };
 
-class DefaultSharedLibrary : public ISlangSharedLibrary, public RefObject
+class DefaultSharedLibrary : public ISlangSharedLibrary, public ComBaseObject
 {
     public:
     SLANG_CLASS_GUID(0xe7f2597b, 0xf803, 0x4b6e, { 0xaf, 0x8b, 0xcb, 0xe3, 0xa2, 0x21, 0xfd, 0x5a })
 
     // ISlangUnknown
-    virtual SLANG_NO_THROW SlangResult SLANG_MCALL queryInterface(SlangUUID const& uuid, void** outObject) SLANG_OVERRIDE;
-    SLANG_REF_OBJECT_IUNKNOWN_ADD_REF         
-    SLANG_REF_OBJECT_IUNKNOWN_RELEASE
-    
+    SLANG_COM_BASE_IUNKNOWN_ALL
+    // ICastable
+    virtual SLANG_NO_THROW void* SLANG_MCALL castAs(const SlangUUID& guid) SLANG_OVERRIDE;
     // ISlangSharedLibrary
     virtual SLANG_NO_THROW void* SLANG_MCALL findSymbolAddressByName(char const* name) SLANG_OVERRIDE;
 
@@ -69,33 +69,34 @@ class DefaultSharedLibrary : public ISlangSharedLibrary, public RefObject
     virtual ~DefaultSharedLibrary();
 
     protected:
-    ISlangUnknown* getInterface(const Guid& guid);
+
+    void* getInterface(const Guid& guid);
+    void* getObject(const Guid& guid);
 
     SharedLibrary::Handle m_sharedLibraryHandle = nullptr;
 };
 
-class TemporarySharedLibrary : public DefaultSharedLibrary
+class ScopeSharedLibrary : public DefaultSharedLibrary
 {
-public:
+public: 
     typedef DefaultSharedLibrary Super;
 
-        /// Get the path to the shared library
-    const String& getPath() const { return m_path; }
+    static ComPtr<ISlangSharedLibrary> create(const SharedLibrary::Handle sharedLibraryHandle, ISlangUnknown* scope) 
+    {
+        return ComPtr< ISlangSharedLibrary>(new ScopeSharedLibrary(sharedLibraryHandle, scope)); 
+    }
 
-        /// Ctor
-    TemporarySharedLibrary(const SharedLibrary::Handle sharedLibraryHandle, const String& path):
+    /// Ctor
+    ScopeSharedLibrary(const SharedLibrary::Handle sharedLibraryHandle, ISlangUnknown* scope) :
         Super(sharedLibraryHandle),
-        m_path(path)
+        m_scope(scope)
     {
     }
 
-    virtual ~TemporarySharedLibrary();
-
-        /// Any files specified in this set will be deleted on exit
-    RefPtr<TemporaryFileSet> m_temporaryFileSet;
+    virtual ~ScopeSharedLibrary();
 
 protected:
-    String m_path;
+    ComPtr<ISlangUnknown> m_scope;
 };
 
 class SharedLibraryUtils

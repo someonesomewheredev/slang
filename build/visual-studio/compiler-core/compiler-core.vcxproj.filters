@@ -9,7 +9,34 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-info.h">
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-associated-impl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-associated.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-desc-util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-diagnostic-util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-handler-impl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-helper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-impl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-representation-impl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-representation.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-artifact-util.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\compiler-core\slang-artifact.h">
@@ -27,7 +54,16 @@
     <ClInclude Include="..\..\..\source\compiler-core\slang-doc-extractor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-downstream-compiler-set.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-downstream-compiler-util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\..\source\compiler-core\slang-downstream-compiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\compiler-core\slang-downstream-dep1.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\compiler-core\slang-dxc-compiler.h">
@@ -113,10 +149,28 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-info.cpp">
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-associated-impl.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact.cpp">
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-desc-util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-diagnostic-util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-handler-impl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-helper.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-impl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-representation-impl.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-artifact-util.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\compiler-core\slang-command-line-args.cpp">
@@ -131,7 +185,16 @@
     <ClCompile Include="..\..\..\source\compiler-core\slang-doc-extractor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-downstream-compiler-set.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-downstream-compiler-util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\..\source\compiler-core\slang-downstream-compiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\compiler-core\slang-downstream-dep1.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\compiler-core\slang-dxc-compiler.cpp">

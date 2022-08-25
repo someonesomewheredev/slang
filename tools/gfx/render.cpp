@@ -2,9 +2,7 @@
 #include "renderer-shared.h"
 #include "../../source/core/slang-math.h"
 #include "open-gl/render-gl.h"
-#include "cuda/render-cuda.h"
-#include "cpu/render-cpu.h"
-#include "debug-layer.h"
+#include "debug-layer/debug-device.h"
 
 #include <cstring>
 
@@ -14,6 +12,8 @@ using namespace Slang;
 Result SLANG_MCALL createD3D11Device(const IDevice::Desc* desc, IDevice** outDevice);
 Result SLANG_MCALL createD3D12Device(const IDevice::Desc* desc, IDevice** outDevice);
 Result SLANG_MCALL createVKDevice(const IDevice::Desc* desc, IDevice** outDevice);
+Result SLANG_MCALL createCUDADevice(const IDevice::Desc* desc, IDevice** outDevice);
+Result SLANG_MCALL createCPUDevice(const IDevice::Desc* desc, IDevice** outDevice);
 
 static bool debugLayerEnabled = false;
 
@@ -180,7 +180,7 @@ static void _compileTimeAsserts()
 
 extern "C"
 {
-    SLANG_GFX_API bool gfxIsCompressedFormat(Format format)
+    SLANG_GFX_API bool SLANG_MCALL gfxIsCompressedFormat(Format format)
     {
         switch (format)
         {
@@ -204,7 +204,7 @@ extern "C"
         }
     }
 
-    SLANG_GFX_API bool gfxIsTypelessFormat(Format format)
+    SLANG_GFX_API bool SLANG_MCALL gfxIsTypelessFormat(Format format)
     {
         switch (format)
         {
@@ -226,7 +226,7 @@ extern "C"
         }
     }
 
-    SLANG_GFX_API SlangResult gfxGetFormatInfo(Format format, FormatInfo* outInfo)
+    SLANG_GFX_API SlangResult SLANG_MCALL gfxGetFormatInfo(Format format, FormatInfo* outInfo)
     {
         *outInfo = s_formatInfoMap.get(format);
         return SLANG_OK;
@@ -309,7 +309,7 @@ extern "C"
             returnComPtr(outDevice, innerDevice);
             return resultCode;
         }
-        RefPtr<DebugDevice> debugDevice = new DebugDevice();
+        RefPtr<debug::DebugDevice> debugDevice = new debug::DebugDevice();
         debugDevice->baseObject = innerDevice;
         returnComPtr(outDevice, debugDevice);
         return resultCode;

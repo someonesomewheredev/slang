@@ -858,6 +858,12 @@ public:
     Slang::Result compileShaders();
     virtual Slang::Result createShaderModule(
         slang::EntryPointReflection* entryPointInfo, Slang::ComPtr<ISlangBlob> kernelCode);
+
+    virtual SLANG_NO_THROW slang::TypeReflection* SLANG_MCALL findTypeByName(const char* name) override
+    {
+        return linkedProgram->getLayout()->findTypeByName(name);
+    }
+
 };
 
 class InputLayoutBase
@@ -1155,6 +1161,8 @@ public:
     virtual SLANG_NO_THROW Result SLANG_MCALL finish() override { return SLANG_OK; }
 };
 
+static const int kRayGenRecordSize = 64; // D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT;
+
 class ShaderTableBase
     : public IShaderTable
     , public Slang::ComObject
@@ -1236,6 +1244,11 @@ public:
         InteropHandle handle,
         const IBufferResource::Desc& srcDesc,
         IBufferResource** outResource) SLANG_OVERRIDE;
+
+    virtual SLANG_NO_THROW Result SLANG_MCALL createProgram2(
+        const IShaderProgram::CreateDesc2& desc,
+        IShaderProgram** outProgram,
+        ISlangBlob** outDiagnostic) override;
 
     virtual SLANG_NO_THROW Result SLANG_MCALL createShaderObject(
         slang::TypeReflection* type,

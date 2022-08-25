@@ -10,7 +10,10 @@
 #include "../core/slang-char-util.h"
 #include "../core/slang-string-slice-pool.h"
 
-#include "slang-artifact-info.h"
+#include "slang-artifact-desc-util.h"
+#include "slang-artifact-diagnostic-util.h"
+#include "slang-artifact-util.h"
+#include "slang-artifact-representation-impl.h"
 
 namespace Slang
 {
@@ -41,7 +44,7 @@ static Index _findVersionEnd(const UnownedStringSlice& in)
     return len;
 }
 
-/* static */SlangResult GCCDownstreamCompilerUtil::parseVersion(const UnownedStringSlice& text, const UnownedStringSlice& prefix, DownstreamCompiler::Desc& outDesc)
+/* static */SlangResult GCCDownstreamCompilerUtil::parseVersion(const UnownedStringSlice& text, const UnownedStringSlice& prefix, DownstreamCompilerDesc& outDesc)
 {
     List<UnownedStringSlice> lines;
     StringUtil::calcLines(text, lines);
@@ -81,15 +84,14 @@ static Index _findVersionEnd(const UnownedStringSlice& in)
             return SLANG_FAIL;
         }
 
-        outDesc.majorVersion = digits[0];
-        outDesc.minorVersion = digits[1];
+        outDesc.version.set(int(digits[0]), int(digits[1]));
         return SLANG_OK;
     }
 
     return SLANG_FAIL;
 }
 
-SlangResult GCCDownstreamCompilerUtil::calcVersion(const ExecutableLocation& exe, DownstreamCompiler::Desc& outDesc)
+SlangResult GCCDownstreamCompilerUtil::calcVersion(const ExecutableLocation& exe, DownstreamCompilerDesc& outDesc)
 {
     CommandLine cmdLine;
     cmdLine.setExecutableLocation(exe);
@@ -129,9 +131,9 @@ SlangResult GCCDownstreamCompilerUtil::calcVersion(const ExecutableLocation& exe
     return SLANG_FAIL;
 }
 
-static SlangResult _parseSeverity(const UnownedStringSlice& in, DownstreamDiagnostic::Severity& outSeverity)
+static SlangResult _parseSeverity(const UnownedStringSlice& in, ArtifactDiagnostic::Severity& outSeverity)
 {
-    typedef DownstreamDiagnostic::Severity Severity;
+    typedef ArtifactDiagnostic::Severity Severity;
 
     if (in == "error" || in == "fatal error")
     {
@@ -164,9 +166,9 @@ enum class LineParseResult
     
 } // anonymous
     
-static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParseResult& outLineParseResult, DownstreamDiagnostic& outDiagnostic)
+static SlangResult _parseGCCFamilyLine(CharSliceAllocator& allocator, const UnownedStringSlice& line, LineParseResult& outLineParseResult, ArtifactDiagnostic& outDiagnostic)
 {
-    typedef DownstreamDiagnostic Diagnostic;
+    typedef ArtifactDiagnostic Diagnostic;
     typedef Diagnostic::Severity Severity;
     
     // Set to default case
@@ -237,7 +239,7 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
             // We'll ignore for now
             outDiagnostic.stage = Diagnostic::Stage::Link;
             outDiagnostic.severity = Severity::Info;
-            outDiagnostic.text = split[1].trim();
+            outDiagnostic.text = allocator.allocate(split[1].trim());
             outLineParseResult = LineParseResult::Start;
             return SLANG_OK;
         }
@@ -246,7 +248,7 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         {
             // Command line errors can be just contain 'error:' etc. Can be seen on apple/clang
             outDiagnostic.stage = Diagnostic::Stage::Compile;
-            outDiagnostic.text = split[1].trim();
+            outDiagnostic.text = allocator.allocate(split[1].trim());
             outLineParseResult = LineParseResult::Single;
             return SLANG_OK;
         }
@@ -274,25 +276,25 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
                 outDiagnostic.stage = Diagnostic::Stage::Link;
             }
 
-            outDiagnostic.text = text;
+            outDiagnostic.text = allocator.allocate(text);
             outLineParseResult = LineParseResult::Start;
             return SLANG_OK;
         }
         else if (split1.startsWith("(.text"))
         {
             // This is a little weak... but looks like it's a link error
-            outDiagnostic.filePath = split[0];
+            outDiagnostic.filePath = allocator.allocate(split[0]);
             outDiagnostic.severity = Severity::Error;
             outDiagnostic.stage = Diagnostic::Stage::Link;
-            outDiagnostic.text = text;
+            outDiagnostic.text = allocator.allocate(text);
             outLineParseResult = LineParseResult::Single;
             return SLANG_OK;
         }
         else if (text.startsWith("ld returned"))
         {
-            outDiagnostic.stage = DownstreamDiagnostic::Stage::Link;
+            outDiagnostic.stage = ArtifactDiagnostic::Stage::Link;
             SLANG_RETURN_ON_FAIL(_parseSeverity(split[1].trim(), outDiagnostic.severity));
-            outDiagnostic.text = line;
+            outDiagnostic.text = allocator.allocate(line);
             outLineParseResult = LineParseResult::Single;
             return SLANG_OK;
         }
@@ -316,11 +318,12 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         }
         else
         {
-            outDiagnostic.filePath = split[1];
-            outDiagnostic.fileLine = 0;
+            outDiagnostic.filePath = allocator.allocate(split[1]);
+            outDiagnostic.location.line = 0;
+            outDiagnostic.location.column = 0;
             outDiagnostic.severity = Diagnostic::Severity::Error;
             outDiagnostic.stage = Diagnostic::Stage::Link;
-            outDiagnostic.text = split[3];
+            outDiagnostic.text = allocator.allocate(split[3]);
             
             outLineParseResult = LineParseResult::Start;
             return SLANG_OK;
@@ -331,11 +334,11 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         // Probably a regular error line
         SLANG_RETURN_ON_FAIL(_parseSeverity(split[3].trim(), outDiagnostic.severity));
 
-        outDiagnostic.filePath = split[0];
-        SLANG_RETURN_ON_FAIL(StringUtil::parseInt(split[1], outDiagnostic.fileLine));
+        outDiagnostic.filePath = allocator.allocate(split[0]);
+        SLANG_RETURN_ON_FAIL(StringUtil::parseInt(split[1], outDiagnostic.location.line));
 
         // Everything from 4 to the end is the error
-        outDiagnostic.text = UnownedStringSlice(split[4].begin(), split.getLast().end());
+        outDiagnostic.text = allocator.allocate(split[4].begin(), split.getLast().end());
 
         outLineParseResult = LineParseResult::Start;
         return SLANG_OK;
@@ -346,35 +349,40 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
     return SLANG_OK;
 }
 
-/* static */SlangResult GCCDownstreamCompilerUtil::parseOutput(const ExecuteResult& exeRes, DownstreamDiagnostics& outOutput)
+/* static */SlangResult GCCDownstreamCompilerUtil::parseOutput(const ExecuteResult& exeRes, IArtifactDiagnostics* diagnostics)
 {
     LineParseResult prevLineResult = LineParseResult::Ignore;
     
-    outOutput.reset();
-    outOutput.rawDiagnostics = exeRes.standardError;
+    CharSliceAllocator allocator;
+
+    diagnostics->reset();
+    diagnostics->setRaw(CharSliceCaster::asCharSlice(exeRes.standardError));
+
+    // We hold in workDiagnostics so as it is more convenient to append to the last with a continuation
+    // also means we don't hold the allocations of building up continuations, just the results when finally allocated at the end
+    List<ArtifactDiagnostic> workDiagnostics;
 
     for (auto line : LineParser(exeRes.standardError.getUnownedSlice()))
     {
-        Diagnostic diagnostic;
-        diagnostic.reset();
-
+        ArtifactDiagnostic diagnostic;
+        
         LineParseResult lineRes;
         
-        SLANG_RETURN_ON_FAIL(_parseGCCFamilyLine(line, lineRes, diagnostic));
+        SLANG_RETURN_ON_FAIL(_parseGCCFamilyLine(allocator, line, lineRes, diagnostic));
         
         switch (lineRes)
         {
             case LineParseResult::Start:
             {
                 // It's start of a new message
-                outOutput.diagnostics.add(diagnostic);
+                workDiagnostics.add(diagnostic);
                 prevLineResult = LineParseResult::Start;
                 break;
             }
             case LineParseResult::Single:
             {
                 // It's a single message, without anything following
-                outOutput.diagnostics.add(diagnostic);
+                workDiagnostics.add(diagnostic);
                 prevLineResult = LineParseResult::Ignore;
                 break;
             }
@@ -382,12 +390,21 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
             {
                 if (prevLineResult == LineParseResult::Start || prevLineResult == LineParseResult::Continuation)
                 {
-                    if (outOutput.diagnostics.getCount() > 0)
+                    if (workDiagnostics.getCount() > 0)
                     {
+                        auto& last = workDiagnostics.getLast();
+
+                        // TODO(JS): Note that this is somewhat wasteful as every time we append we just allocate more memory
+                        // to hold the result.
+                        // If we had an allocator dedicated to 'text' we could perhaps just append to the end of the last allocation
+                        //  
                         // We are now in a continuation, add to the last
-                        auto& text = outOutput.diagnostics.getLast().text;
-                        text.append("\n");
-                        text.append(line);
+                        StringBuilder buf;
+                        buf.append(asStringSlice(last.text));
+                        buf.append("\n");
+                        buf.append(line);
+
+                        last.text = allocator.allocate(buf);
                     }
                     prevLineResult = LineParseResult::Continuation;
                 }
@@ -402,59 +419,36 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         }
     }
 
-    if (outOutput.has(Diagnostic::Severity::Error) || exeRes.resultCode != 0)
+    for (const auto& diagnostic : workDiagnostics)
     {
-        outOutput.result = SLANG_FAIL;
+        diagnostics->add(diagnostic);
+    }
+
+    if (diagnostics->hasOfAtLeastSeverity(ArtifactDiagnostic::Severity::Error) || exeRes.resultCode != 0)
+    {
+        diagnostics->setResult(SLANG_FAIL);
     }
 
     return SLANG_OK;
 }
 
-/* static */ SlangResult GCCDownstreamCompilerUtil::calcModuleFilePath(const CompileOptions& options, StringBuilder& outPath)
+/* static */SlangResult GCCDownstreamCompilerUtil::calcCompileProducts(const CompileOptions& options, ProductFlags flags, IFileArtifactRepresentation* lockFile, List<ComPtr<IArtifact>>& outArtifacts)
 {
     SLANG_ASSERT(options.modulePath.getLength());
 
-    outPath.Clear();
-
-    switch (options.targetType)
-    {
-        case SLANG_SHADER_SHARED_LIBRARY:
-        {
-            outPath << SharedLibrary::calcPlatformPath(options.modulePath.getUnownedSlice());
-            return SLANG_OK;
-        }
-        case SLANG_HOST_EXECUTABLE:
-        {
-            outPath << options.modulePath;
-            outPath << Process::getExecutableSuffix();
-            return SLANG_OK;
-        }
-        case SLANG_OBJECT_CODE:
-        {
-#if __CYGWIN__
-            outPath << options.modulePath << ".obj";
-#else
-            // Will be .o for typical gcc targets
-            outPath << options.modulePath << ".o";
-#endif
-            return SLANG_OK;
-        }
-    }
-
-    return SLANG_FAIL;
-}
-
-/* static */SlangResult GCCDownstreamCompilerUtil::calcCompileProducts(const CompileOptions& options, ProductFlags flags, List<String>& outPaths)
-{
-    SLANG_ASSERT(options.modulePath.getLength());
-
-    outPaths.clear();
+    outArtifacts.clear();
 
     if (flags & ProductFlag::Execution)
     {
         StringBuilder builder;
-        SLANG_RETURN_ON_FAIL(calcModuleFilePath(options, builder));
-        outPaths.add(builder);
+        const auto desc = ArtifactDescUtil::makeDescForCompileTarget(options.targetType);
+        SLANG_RETURN_ON_FAIL(ArtifactDescUtil::calcPathForDesc(desc, options.modulePath.getUnownedSlice(), builder));
+
+        auto fileRep = FileArtifactRepresentation::create(IFileArtifactRepresentation::Kind::Owned, builder.getUnownedSlice(), lockFile, nullptr);
+        auto artifact = ArtifactUtil::createArtifact(desc);
+        artifact->addRepresentation(fileRep);
+
+        outArtifacts.add(artifact);
     }
 
     return SLANG_OK;
@@ -467,6 +461,8 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
 
     PlatformKind platformKind = (options.platform == PlatformKind::Unknown) ? PlatformUtil::getPlatformKind() : options.platform;
         
+    const auto targetDesc = ArtifactDescUtil::makeDescForCompileTarget(options.targetType);
+
     if (options.sourceLanguage == SLANG_SOURCE_LANGUAGE_CPP)
     {
         cmdLine.addArg("-fvisibility=hidden");
@@ -542,9 +538,9 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         }
     }
 
-    StringBuilder moduleFilePath;
-    calcModuleFilePath(options, moduleFilePath);
-
+    StringBuilder moduleFilePath; 
+    SLANG_RETURN_ON_FAIL(ArtifactDescUtil::calcPathForDesc(targetDesc, options.modulePath.getUnownedSlice(), moduleFilePath));
+    
     cmdLine.addArg("-o");
     cmdLine.addArg(moduleFilePath);
 
@@ -564,6 +560,7 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         }
         case SLANG_HOST_EXECUTABLE:
         {
+            cmdLine.addArg("-rdynamic");
             break;
         }
         case SLANG_OBJECT_CODE:
@@ -623,6 +620,12 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
     }
 
     // Add the library paths
+
+    if (options.libraryPaths.getCount() && options.targetType == SLANG_HOST_EXECUTABLE)
+    {
+        cmdLine.addArg("-Wl,-rpath,$ORIGIN");
+    }
+
     StringSlicePool libPathPool(StringSlicePool::Style::Default);
 
     for (const auto& libPath : options.libraryPaths)
@@ -633,15 +636,17 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
     // Artifacts might add library paths
     for (IArtifact* artifact : options.libraries)
     {
-        const auto desc = artifact->getDesc();
+        const auto artifactDesc = artifact->getDesc();
         // If it's a library for CPU types, try and use it
-        if (ArtifactInfoUtil::isCpuBinary(desc) && desc.kind == ArtifactKind::Library)
+        if (ArtifactDescUtil::isCpuBinary(artifactDesc) && artifactDesc.kind == ArtifactKind::Library)
         {
-            // Get the name and path (can be empty) to the library
-            SLANG_RETURN_ON_FAIL(artifact->requireFileLike(ArtifactKeep::No));
+            ComPtr<IFileArtifactRepresentation> fileRep;
 
-            libPathPool.add(ArtifactInfoUtil::getParentPath(artifact));
-            cmdLine.addPrefixPathArg("-l", ArtifactInfoUtil::getBaseName(artifact));
+            // Get the name and path (can be empty) to the library
+            SLANG_RETURN_ON_FAIL(artifact->requireFile(ArtifactKeep::Yes, nullptr, fileRep.writeRef()));
+
+            libPathPool.add(ArtifactUtil::getParentPath(fileRep));
+            cmdLine.addPrefixPathArg("-l", ArtifactDescUtil::getBaseName(artifact->getDesc(), fileRep));
         }
     }
 
@@ -665,15 +670,16 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
     return SLANG_OK;
 }
 
-/* static */SlangResult GCCDownstreamCompilerUtil::createCompiler(const ExecutableLocation& exe, RefPtr<DownstreamCompiler>& outCompiler)
+/* static */SlangResult GCCDownstreamCompilerUtil::createCompiler(const ExecutableLocation& exe, ComPtr<IDownstreamCompiler>& outCompiler)
 {
-    DownstreamCompiler::Desc desc;
+    DownstreamCompilerDesc desc;
     SLANG_RETURN_ON_FAIL(GCCDownstreamCompilerUtil::calcVersion(exe, desc));
 
-    RefPtr<CommandLineDownstreamCompiler> compiler(new GCCDownstreamCompiler(desc));
+    auto compiler = new GCCDownstreamCompiler(desc);
+    ComPtr<IDownstreamCompiler> compilerIntf(compiler);
     compiler->m_cmdLine.setExecutableLocation(exe);
 
-    outCompiler = compiler;
+    outCompiler.swap(compilerIntf);
     return SLANG_OK;
 }
 
@@ -681,7 +687,7 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
 {
     SLANG_UNUSED(loader);
 
-    RefPtr<DownstreamCompiler> compiler;
+    ComPtr<IDownstreamCompiler> compiler;
     if (SLANG_SUCCEEDED(createCompiler(ExecutableLocation(path, "g++"), compiler)))
     {
         // A downstream compiler for Slang must currently support C++14 - such that
@@ -694,7 +700,7 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
         // but that requires some more complex behavior, so we don't allow for now.
         
         auto desc = compiler->getDesc();
-        if (desc.majorVersion < 5)
+        if (desc.version.m_major < 5)
         {
             // If the version isn't 5 or higher, we don't add this version of the compiler.
             return SLANG_OK;
@@ -709,7 +715,7 @@ static SlangResult _parseGCCFamilyLine(const UnownedStringSlice& line, LineParse
 {
     SLANG_UNUSED(loader);
 
-    RefPtr<DownstreamCompiler> compiler;
+    ComPtr<IDownstreamCompiler> compiler;
     if (SLANG_SUCCEEDED(createCompiler(ExecutableLocation(path, "clang"), compiler)))
     {
         set->addCompiler(compiler);

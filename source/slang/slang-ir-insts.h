@@ -186,6 +186,17 @@ struct IRComInterfaceDecoration : IRDecoration
     IR_LEAF_ISA(ComInterfaceDecoration)
 };
 
+struct IRCOMWitnessDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_COMWitnessDecoration
+    };
+    IR_LEAF_ISA(COMWitnessDecoration)
+
+    IRInst* getWitnessTable() { return getOperand(0); }
+};
+
 /// A decoration on `IRParam`s that represent generic parameters,
 /// marking the interface type that the generic parameter conforms to.
 /// A generic parameter can have more than one `IRTypeConstraintDecoration`s
@@ -454,6 +465,18 @@ struct IRDllImportDecoration : IRDecoration
     UnownedStringSlice getLibraryName() { return getLibraryNameOperand()->getStringSlice(); }
 
     IRStringLit* getFunctionNameOperand() { return cast<IRStringLit>(getOperand(1)); }
+    UnownedStringSlice getFunctionName() { return getFunctionNameOperand()->getStringSlice(); }
+};
+
+struct IRDllExportDecoration : IRDecoration
+{
+    enum
+    {
+        kOp = kIROp_DllExportDecoration
+    };
+    IR_LEAF_ISA(DllExportDecoration)
+
+    IRStringLit* getFunctionNameOperand() { return cast<IRStringLit>(getOperand(0)); }
     UnownedStringSlice getFunctionName() { return getFunctionNameOperand()->getStringSlice(); }
 };
 
@@ -1818,6 +1841,27 @@ struct IRGetTupleElement : IRInst
     IRInst* getElementIndex() { return getOperand(1); }
 };
 
+// An Instruction that creates a differential pair value from a
+// primal and differential.
+struct IRMakeDifferentialPair : IRInst
+{
+    IR_LEAF_ISA(MakeDifferentialPair)
+    IRInst* getPrimalValue() { return getOperand(0); }
+    IRInst* getDifferentialValue() { return getOperand(1); }
+};
+
+struct IRDifferentialPairGetDifferential : IRInst
+{
+    IR_LEAF_ISA(DifferentialPairGetDifferential)
+    IRInst* getBase() { return getOperand(0); }
+};
+
+struct IRDifferentialPairGetPrimal : IRInst
+{
+    IR_LEAF_ISA(DifferentialPairGetPrimal)
+    IRInst* getBase() { return getOperand(0); }
+};
+
 // Constructs an `Result<T,E>` value from an error code.
 struct IRMakeResultError : IRInst
 {
@@ -1856,6 +1900,33 @@ struct IRGetResultError : IRInst
     IR_LEAF_ISA(GetResultError)
 
     IRInst* getResultOperand() { return getOperand(0); }
+};
+
+struct IROptionalHasValue : IRInst
+{
+    IR_LEAF_ISA(OptionalHasValue)
+
+    IRInst* getOptionalOperand() { return getOperand(0); }
+};
+
+struct IRGetOptionalValue : IRInst
+{
+    IR_LEAF_ISA(GetOptionalValue)
+
+    IRInst* getOptionalOperand() { return getOperand(0); }
+};
+
+struct IRMakeOptionalValue : IRInst
+{
+    IR_LEAF_ISA(MakeOptionalValue)
+
+    IRInst* getValue() { return getOperand(0); }
+};
+
+struct IRMakeOptionalNone : IRInst
+{
+    IR_LEAF_ISA(MakeOptionalNone)
+    IRInst* getDefaultValue() { return getOperand(0); }
 };
 
     /// An instruction that packs a concrete value into an existential-type "box"
@@ -1939,6 +2010,17 @@ struct IRLiveRangeMarker : IRInst
 struct IRLiveRangeStart : IRLiveRangeMarker
 {
     IR_LEAF_ISA(LiveRangeStart);        
+};
+
+struct IRIsType : IRInst
+{
+    IR_LEAF_ISA(IsType);
+
+    IRInst* getValue() { return getOperand(0); }
+    IRInst* getValueWitness() { return getOperand(1); }
+
+    IRInst* getTypeOperand() { return getOperand(2); }
+    IRInst* getTargetWitness() { return getOperand(3); }
 };
 
 /// Demarks where the referenced item is no longer live, optimimally (although not
@@ -2212,6 +2294,7 @@ public:
     IRTupleType* getTupleType(IRType* type0, IRType* type1, IRType* type2, IRType* type3);
 
     IRResultType* getResultType(IRType* valueType, IRType* errorType);
+    IROptionalType* getOptionalType(IRType* valueType);
 
     IRBasicBlockType*   getBasicBlockType();
     IRWitnessTableType* getWitnessTableType(IRType* baseType);
@@ -2254,6 +2337,10 @@ public:
         IRType* elementType,
         IRInst* rowCount,
         IRInst* columnCount);
+
+    IRDifferentialPairType* getDifferentialPairType(
+        IRType* valueType,
+        IRWitnessTable* witnessTable);
 
     IRFuncType* getFuncType(
         UInt            paramCount,
@@ -2361,6 +2448,8 @@ public:
 
     IRInst* emitJVPDifferentiateInst(IRType* type, IRInst* baseFn);
 
+    IRInst* emitMakeDifferentialPair(IRType* type, IRInst* primal, IRInst* differential);
+
     IRInst* emitSpecializeInst(
         IRType*         type,
         IRInst*         genericVal,
@@ -2454,7 +2543,10 @@ public:
     IRInst* emitIsResultError(IRInst* result);
     IRInst* emitGetResultError(IRInst* result);
     IRInst* emitGetResultValue(IRInst* result);
-
+    IRInst* emitOptionalHasValue(IRInst* optValue);
+    IRInst* emitGetOptionalValue(IRInst* optValue);
+    IRInst* emitMakeOptionalValue(IRInst* optType, IRInst* value);
+    IRInst* emitMakeOptionalNone(IRInst* optType, IRInst* defaultValue);
     IRInst* emitMakeVector(
         IRType*         type,
         UInt            argCount,
@@ -2521,7 +2613,7 @@ public:
 
     IRInst* emitManagedPtrAttach(IRInst* managedPtrVar, IRInst* value);
 
-    IRInst* emitManagedPtrDetach(IRInst* managedPtrVar);
+    IRInst* emitManagedPtrDetach(IRType* type, IRInst* managedPtrVal);
 
     IRInst* emitGetNativePtr(IRInst* value);
 
@@ -2530,6 +2622,8 @@ public:
     IRInst* emitGpuForeach(List<IRInst*> args);
 
     IRUndefined* emitUndefined(IRType* type);
+
+    IRInst* emitReinterpret(IRInst* type, IRInst* value);
 
     IRInst* findOrAddInst(
          IRType*                 type,
@@ -2666,6 +2760,8 @@ public:
         IRInst* image,
         IRInst* coord,
         IRInst* value);
+
+    IRInst* emitIsType(IRInst* value, IRInst* witness, IRInst* typeOperand, IRInst* targetWitness);
 
     IRInst* emitFieldExtract(
         IRType*         type,
@@ -2830,6 +2926,8 @@ public:
     IRInst* emitBitCast(
         IRType* type,
         IRInst* val);
+
+    IRInst* emitCastPtrToBool(IRInst* val);
 
     IRGlobalConstant* emitGlobalConstant(
         IRType* type);
@@ -3052,9 +3150,19 @@ public:
         addDecoration(value, kIROp_JVPDerivativeReferenceDecoration, jvpFn);
     }
 
+    void addCOMWitnessDecoration(IRInst* value, IRInst* witnessTable)
+    {
+        addDecoration(value, kIROp_COMWitnessDecoration, &witnessTable, 1);
+    }
+
     void addDllImportDecoration(IRInst* value, UnownedStringSlice const& libraryName, UnownedStringSlice const& functionName)
     {
         addDecoration(value, kIROp_DllImportDecoration, getStringValue(libraryName), getStringValue(functionName));
+    }
+
+    void addDllExportDecoration(IRInst* value, UnownedStringSlice const& functionName)
+    {
+        addDecoration(value, kIROp_DllExportDecoration, getStringValue(functionName));
     }
 
     void addEntryPointDecoration(IRInst* value, Profile profile, UnownedStringSlice const& name, UnownedStringSlice const& moduleName)
@@ -3117,9 +3225,9 @@ public:
         addDecoration(inst, kIROp_AnyValueSizeDecoration, getIntValue(getIntType(), value));
     }
 
-    void addComInterfaceDecoration(IRInst* inst)
+    void addComInterfaceDecoration(IRInst* inst, UnownedStringSlice guid)
     {
-        addDecoration(inst, kIROp_ComInterfaceDecoration);
+        addDecoration(inst, kIROp_ComInterfaceDecoration, getStringValue(guid));
     }
 
     void addTypeConstraintDecoration(IRInst* inst, IRInst* constraintType)

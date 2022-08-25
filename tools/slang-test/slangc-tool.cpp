@@ -3,6 +3,7 @@
 
 #include "../../source/core/slang-exception.h"
 #include "../../source/core/slang-test-tool-util.h"
+#include "../../source/core/slang-io.h"
 
 using namespace Slang;
 
@@ -31,10 +32,14 @@ SlangResult SlangCTool::innerMain(StdWriters* stdWriters, slang::IGlobalSession*
     ComPtr<slang::ICompileRequest> compileRequest;
     SLANG_RETURN_ON_FAIL(session->createCompileRequest(compileRequest.writeRef()));
 
+    auto compilerExecutablePath = Path::getParentDirectory(Path::getExecutablePath());
+    compileRequest->addSearchPath(compilerExecutablePath.getBuffer());
+
     // Do any app specific configuration
     for (int i = 0; i < SLANG_WRITER_CHANNEL_COUNT_OF; ++i)
     {
-        compileRequest->setWriter(SlangWriterChannel(i), stdWriters->getWriter(i));
+        const auto channel = SlangWriterChannel(i);
+        compileRequest->setWriter(channel, stdWriters->getWriter(channel));
     }
 
     compileRequest->setDiagnosticCallback(&_diagnosticCallback, nullptr);

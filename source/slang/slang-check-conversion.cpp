@@ -639,6 +639,11 @@ namespace Slang
             return true;
         }
 
+        if (auto refType = as<RefType>(toType))
+        {
+            return _coerce(refType->getValueType(), outToExpr, fromType, fromExpr, outCost);
+        }
+
         // If both are string types we assume they are convertable in both directions
         if (as<StringTypeBase>(fromType) && as<StringTypeBase>(toType))
         {
@@ -768,13 +773,28 @@ namespace Slang
         {
             if (outCost)
             {
-                *outCost = kConversionCost_None;
+                *outCost = kConversionCost_NullPtrToPtr;
             }
             if (outToExpr)
                 *outToExpr = fromExpr;
             return true;
         }
-
+        // none_t can be cast into any Optional<T> type.
+        if (as<NoneType>(fromType) && as<OptionalType>(toType))
+        {
+            if (outCost)
+            {
+                *outCost = kConversionCost_NoneToOptional;
+            }
+            if (outToExpr)
+            {
+                auto resultExpr = getASTBuilder()->create<MakeOptionalExpr>();
+                resultExpr->loc = fromExpr->loc;
+                resultExpr->type = toType;
+                *outToExpr = resultExpr;
+            }
+            return true;
+        }
         // If we are casting to an interface type, then that will succeed
         // if the "from" type conforms to the interface.
         //
@@ -935,15 +955,39 @@ namespace Slang
             // but then emit a diagnostic when actually reifying
             // the result expression.
             //
-            if( cost >= kConversionCost_Explicit )
+            if (outToExpr)
             {
-                if( outToExpr )
+                if (cost >= kConversionCost_Explicit)
                 {
                     getSink()->diagnose(fromExpr, Diagnostics::typeMismatch, toType, fromType);
-                    getSink()->diagnose(fromExpr, Diagnostics::noteExplicitConversionPossible, fromType, toType);
+                    getSink()->diagnose(
+                        fromExpr, Diagnostics::noteExplicitConversionPossible, fromType, toType);
+                }
+                else if (cost >= kConversionCost_Default)
+                {
+                    // For general types of implicit conversions, we issue a warning, unless `fromExpr` is a known constant
+                    // and we know it won't cause a problem.
+                    bool shouldEmitGeneralWarning = true;
+                    if (isScalarIntegerType(toType))
+                    {
+                        if (auto intVal = tryFoldIntegerConstantExpression(fromExpr, nullptr))
+                        {
+                            if (auto val = as<ConstantIntVal>(intVal))
+                            {
+                                if (isIntValueInRangeOfType(val->value, toType))
+                                {
+                                    // OK.
+                                    shouldEmitGeneralWarning = false;
+                                }
+                            }
+                        }
+                    }
+                    if (shouldEmitGeneralWarning)
+                    {
+                        getSink()->diagnose(fromExpr, Diagnostics::unrecommendedImplicitConversion, fromType, toType);
+                    }
                 }
             }
-
             if(outCost)
                 *outCost = cost;
 

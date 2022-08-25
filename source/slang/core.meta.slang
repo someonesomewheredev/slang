@@ -71,10 +71,6 @@ syntax snorm : SNormModifier;
 ///
 syntax __extern_cpp : ExternCppModifier;
 
-/// Modifer to mark a function for forward-mode differentiation.
-/// i.e. the compiler will automatically generate a new function
-/// that computes the jacobian-vector product of the original.
-syntax __differentiate_jvp : JVPDerivativeModifier;
 
 /// A type that can be used as an operand for builtins
 [sealed]
@@ -353,12 +349,109 @@ struct NullPtr
 {
 };
 
+__magic_type(NoneType)
+__intrinsic_type($(kIROp_VoidType))
+struct __none_t
+{
+};
+
 __generic<T>
 __magic_type(PtrType)
 __intrinsic_type($(kIROp_PtrType))
 struct Ptr
 {
+    __generic<U>
+    __intrinsic_op($(kIROp_BitCast))
+    __init(Ptr<U> ptr);
+
+    __intrinsic_op($(kIROp_BitCast))
+    __init(uint64_t val);
+
+    __intrinsic_op($(kIROp_BitCast))
+    __init(int64_t val);
+
+    __subscript(int index) -> T
+    {
+        [__unsafeForceInlineEarly]
+        get
+        {
+            return __load(__getElementPtr(this, index));
+        }
+
+        [__unsafeForceInlineEarly]
+        set(T newValue)
+        {
+            __store(__getElementPtr(this, index), newValue);
+        }
+
+        __intrinsic_op($(kIROp_getElementPtr))
+        ref;
+    }
 };
+
+__intrinsic_op($(kIROp_Load))
+T __load<T>(Ptr<T> ptr);
+
+__intrinsic_op($(kIROp_Store))
+void __store<T>(Ptr<T> ptr, T val);
+
+__intrinsic_op($(kIROp_getElementPtr))
+Ptr<T> __getElementPtr<T>(Ptr<T> ptr, int index);
+
+__generic<T>
+__intrinsic_op($(kIROp_Less))
+bool operator<(Ptr<T> p1, Ptr<T> p2);
+
+__generic<T>
+__intrinsic_op($(kIROp_Leq))
+bool operator<=(Ptr<T> p1, Ptr<T> p2);
+
+__generic<T>
+__intrinsic_op($(kIROp_Greater))
+bool operator>(Ptr<T> p1, Ptr<T> p2);
+
+__generic<T>
+__intrinsic_op($(kIROp_Geq))
+bool operator>=(Ptr<T> p1, Ptr<T> p2);
+
+__generic<T>
+__intrinsic_op($(kIROp_Neq))
+bool operator!=(Ptr<T> p1, Ptr<T> p2);
+
+__generic<T>
+__intrinsic_op($(kIROp_Eql))
+bool operator==(Ptr<T> p1, Ptr<T> p2);
+
+extension bool
+{
+    __generic<T>
+    __implicit_conversion($(kConversionCost_PtrToBool))
+    __intrinsic_op($(kIROp_CastPtrToBool))
+    __init(Ptr<T> ptr);
+
+    static bool maxValue = true;
+    static bool minValue = false;
+}
+
+extension uint64_t
+{
+    __generic<T>
+    __intrinsic_op($(kIROp_Construct))
+    __init(Ptr<T> ptr);
+
+    static uint64_t maxValue = 0xFFFFFFFFFFFFFFFFULL;
+    static uint64_t minValue = 0;
+}
+
+extension int64_t
+{
+    __generic<T>
+    __intrinsic_op($(kIROp_Construct))
+    __init(Ptr<T> ptr);
+
+    static int64_t maxValue =  0x7FFFFFFFFFFFFFFFLL;
+    static int64_t minValue = -0x8000000000000000LL;
+}
 
 __generic<T>
 __magic_type(OutType)
@@ -378,6 +471,75 @@ __intrinsic_type($(kIROp_RefType))
 struct Ref
 {};
 
+__generic<T>
+__magic_type(OptionalType)
+__intrinsic_type($(kIROp_OptionalType))
+struct Optional
+{
+    property bool hasValue
+    {
+        __intrinsic_op($(kIROp_OptionalHasValue))
+        get;
+    }
+
+    property T value
+    {
+        __intrinsic_op($(kIROp_GetOptionalValue))
+        get;
+    }
+
+    __implicit_conversion($(kConversionCost_ValToOptional))
+    __intrinsic_op($(kIROp_MakeOptionalValue))
+    __init(T val);
+};
+
+__generic<T>
+[__unsafeForceInlineEarly]
+bool operator==(Optional<T> val, __none_t noneVal)
+{
+    return !val.hasValue;
+}
+__generic<T>
+[__unsafeForceInlineEarly]
+bool operator!=(Optional<T> val, __none_t noneVal)
+{
+    return val.hasValue;
+}
+__generic<T>
+[__unsafeForceInlineEarly]
+bool operator==(__none_t noneVal, Optional<T> val)
+{
+    return !val.hasValue;
+}
+__generic<T>
+[__unsafeForceInlineEarly]
+bool operator!=(__none_t noneVal, Optional<T> val)
+{
+    return val.hasValue;
+}
+
+__generic<T>
+__magic_type(NativeRefType)
+__intrinsic_type($(kIROp_NativePtrType))
+struct NativeRef
+{
+    __intrinsic_op($(kIROp_GetNativePtr))
+    __init(T val);
+};
+
+__generic<T>
+__intrinsic_op($(kIROp_ManagedPtrAttach))
+void __managed_ptr_attach(__ref T val, NativeRef<T> nativeVal);
+
+__generic<T>
+[__unsafeForceInlineEarly]
+T __attachToNativeRef(NativeRef<T> nativeVal)
+{
+    T result;
+    __managed_ptr_attach(result, nativeVal);
+    return result;
+}
+
 __magic_type(StringType)
 __intrinsic_type($(kIROp_StringType))
 struct String
@@ -392,6 +554,52 @@ __magic_type(DynamicType)
 __intrinsic_type($(kIROp_DynamicType))
 struct __Dynamic
 {};
+
+extension float
+{
+    static float maxValue = 340282346638528859811704183484516925440.0f;
+}
+
+extension double
+{
+    static double maxValue = 179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.0;
+}
+
+extension int
+{
+    static int maxValue = 2147483647;
+    static int minValue = -2147483648;
+}
+
+extension uint
+{
+    static uint maxValue = 4294967295;
+    static uint minValue = 0;
+}
+
+extension int8_t
+{
+    static int8_t maxValue = 127;
+    static int8_t minValue = -128;
+}
+
+extension uint16_t
+{
+    static uint16_t maxValue = 255;
+    static uint16_t minValue = 0;
+}
+
+extension int16_t
+{
+    static int16_t maxValue = 32767;
+    static int16_t minValue = -32768;
+}
+
+extension uint16_t
+{
+    static uint16_t maxValue = 65535;
+    static uint16_t minValue = 0;
+}
 
     /// An `N` component vector with elements of type `T`.
 __generic<T = float, let N : int = 4>
@@ -614,7 +822,6 @@ ${{{{
 ${{{{
 }
 }}}}
-
 
 //@ public:
 
@@ -1623,6 +1830,25 @@ for (auto op : intrinsicUnaryOps)
 
 }}}}
 
+__generic<T>
+__intrinsic_op(0)
+__prefix Ref<T> operator*(Ptr<T> value);
+
+__generic<T>
+__intrinsic_op(0)
+__prefix Ptr<T> operator&(__ref T value);
+
+__generic<T>
+__intrinsic_op($(kIROp_getElementPtr))
+Ptr<T> operator+(Ptr<T> value, int64_t offset);
+
+__generic<T>
+[__unsafeForceInlineEarly]
+Ptr<T> operator-(Ptr<T> value, int64_t offset)
+{
+    return __getElementPtr(value, -offset);
+}
+
 __generic<T : __BuiltinArithmeticType>
 [__unsafeForceInlineEarly]
 __prefix T operator+(T value)
@@ -1681,6 +1907,12 @@ __generic<T : __BuiltinArithmeticType, let R : int, let C : int>
 [__unsafeForceInlineEarly]
 matrix<T,R,C> operator$(op.name)(in out matrix<T,R,C> value)
 {$(fixity.bodyPrefix) value = value $(op.binOp) T(1); return $(fixity.returnVal); }
+
+$(fixity.qual)
+__generic<T>
+[__unsafeForceInlineEarly]
+Ptr<T> operator$(op.name)(in out Ptr<T> value)
+{$(fixity.bodyPrefix) value = value $(op.binOp) 1; return $(fixity.returnVal); }
 
 ${{{{
 }
@@ -2190,8 +2422,11 @@ attribute_syntax [__unsafeForceInlineEarly] : UnsafeForceInlineEarlyAttribute;
 __attributeTarget(FuncDecl)
 attribute_syntax [DllImport(modulePath: String)] : DllImportAttribute;
 
+__attributeTarget(FuncDecl)
+attribute_syntax [DllExport] : DllExportAttribute;
+
 __attributeTarget(InterfaceDecl)
-attribute_syntax [COM] : ComInterfaceAttribute;
+attribute_syntax [COM(guid: String)] : ComInterfaceAttribute;
 
 // Inheritance Control
 __attributeTarget(AggTypeDecl)
@@ -2214,7 +2449,3 @@ attribute_syntax [noinline] : NoInlineAttribute;
 
 __attributeTarget(StructDecl)
 attribute_syntax [payload] : PayloadAttribute;
-
-// Custom JVP Function reference
-__attributeTarget(FuncDecl)
-attribute_syntax [__custom_jvp(function)]   : CustomJVPAttribute;

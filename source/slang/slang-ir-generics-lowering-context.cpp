@@ -3,6 +3,7 @@
 #include "slang-ir-generics-lowering-context.h"
 
 #include "slang-ir-layout.h"
+#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -33,26 +34,6 @@ namespace Slang
         {
             return isPolymorphicType(ptrType->getValueType());
         }
-        return false;
-    }
-
-    bool isComInterfaceType(IRType* type)
-    {
-        if (!type) return false;
-        if (type->findDecoration<IRComInterfaceDecoration>() || 
-            type->getOp() == kIROp_ComPtrType)
-        {
-            return true;
-        }
-
-        // TODO(JS): Perhaps it should do IRPtrTypeBase, or some more expansive set of 'PtrType's 
-        // but for now test for PtrType
-        if (auto ptrType = as<IRPtrType>(type))
-        {
-            auto valueType = ptrType->getValueType();
-            return valueType->findDecoration<IRComInterfaceDecoration>() != nullptr;
-        }
-
         return false;
     }
 
@@ -373,9 +354,9 @@ namespace Slang
         return witnessTables;
     }
 
-    IRIntegerValue SharedGenericsLoweringContext::getInterfaceAnyValueSize(IRInst* type, SourceLoc usageLocation)
+    IRIntegerValue SharedGenericsLoweringContext::getInterfaceAnyValueSize(IRInst* type, SourceLoc usageLoc)
     {
-        SLANG_UNUSED(usageLocation);
+        SLANG_UNUSED(usageLoc);
 
         if (auto decor = type->findDecoration<IRAnyValueSizeDecoration>())
         {

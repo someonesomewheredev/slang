@@ -60,6 +60,27 @@ public:
             m_commandBuffer = cmdBuffer;
         }
 
+        virtual void* getInterface(SlangUUID const& uuid)
+        {
+            if (uuid == GfxGUID::IID_IResourceCommandEncoder || uuid == ISlangUnknown::getTypeGuid())
+            {
+                return this;
+            }
+            return nullptr;
+        }
+        virtual SLANG_NO_THROW SlangResult SLANG_MCALL
+            queryInterface(SlangUUID const& uuid, void** outObject) override
+        {
+            if (auto ptr = getInterface(uuid))
+            {
+                *outObject = ptr;
+                return SLANG_OK;
+            }
+            return SLANG_E_NO_INTERFACE;
+        }
+        virtual SLANG_NO_THROW uint32_t SLANG_MCALL addRef() override { return 1; }
+        virtual SLANG_NO_THROW uint32_t SLANG_MCALL release() override { return 1; }
+
         virtual SLANG_NO_THROW void SLANG_MCALL endEncoding() override {}
         virtual SLANG_NO_THROW void SLANG_MCALL copyBuffer(
             IBufferResource* dst,
@@ -242,6 +263,14 @@ public:
     {
     public:
         SLANG_GFX_FORWARD_RESOURCE_COMMAND_ENCODER_IMPL(ResourceCommandEncoderImpl)
+        virtual void* getInterface(SlangUUID const& uuid) override
+        {
+            if (uuid == GfxGUID::IID_IResourceCommandEncoder || uuid == GfxGUID::IID_IRenderCommandEncoder || uuid == ISlangUnknown::getTypeGuid())
+            {
+                return this;
+            }
+            return nullptr;
+        }
     public:
         virtual SLANG_NO_THROW void SLANG_MCALL endEncoding() override {}
 
@@ -432,6 +461,14 @@ public:
     {
     public:
         SLANG_GFX_FORWARD_RESOURCE_COMMAND_ENCODER_IMPL(ResourceCommandEncoderImpl)
+        virtual void* getInterface(SlangUUID const& uuid) override
+        {
+            if (uuid == GfxGUID::IID_IResourceCommandEncoder || uuid == GfxGUID::IID_IComputeCommandEncoder || uuid == ISlangUnknown::getTypeGuid())
+            {
+                return this;
+            }
+            return nullptr;
+        }
     public:
         virtual SLANG_NO_THROW void SLANG_MCALL endEncoding() override
         {
@@ -711,13 +748,17 @@ SLANG_NO_THROW SlangResult SLANG_MCALL ImmediateRendererBase::readBufferResource
     size_t size,
     ISlangBlob** outBlob)
 {
-    RefPtr<ListBlob> blob = new ListBlob();
-    blob->m_data.setCount((Index)size);
+    List<uint8_t> blobData;
+
+    blobData.setCount((Index)size);
     auto content = (uint8_t*)map(buffer, gfx::MapFlavor::HostRead);
     if (!content)
         return SLANG_FAIL;
-    memcpy(blob->m_data.getBuffer(), content + offset, size);
+    memcpy(blobData.getBuffer(), content + offset, size);
     unmap(buffer, offset, size);
+
+    auto blob = ListBlob::moveCreate(blobData);
+
     returnComPtr(outBlob, blob);
     return SLANG_OK;
 }

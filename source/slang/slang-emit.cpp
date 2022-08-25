@@ -8,7 +8,9 @@
 #include "slang-ir-bind-existentials.h"
 #include "slang-ir-byte-address-legalize.h"
 #include "slang-ir-collect-global-uniforms.h"
+#include "slang-ir-cleanup-void.h"
 #include "slang-ir-dce.h"
+#include "slang-ir-dll-export.h"
 #include "slang-ir-dll-import.h"
 #include "slang-ir-eliminate-phis.h"
 #include "slang-ir-entry-point-uniforms.h"
@@ -24,6 +26,7 @@
 #include "slang-ir-lower-generics.h"
 #include "slang-ir-lower-tuple-types.h"
 #include "slang-ir-lower-result-type.h"
+#include "slang-ir-lower-optional-type.h"
 #include "slang-ir-lower-bit-cast.h"
 #include "slang-ir-lower-reinterpret.h"
 #include "slang-ir-metadata.h"
@@ -64,6 +67,11 @@
 #include "slang-emit-hlsl.h"
 #include "slang-emit-cpp.h"
 #include "slang-emit-cuda.h"
+
+#include "../compiler-core/slang-artifact-desc-util.h"
+#include "../compiler-core/slang-artifact-util.h"
+#include "../compiler-core/slang-artifact-impl.h"
+#include "../compiler-core/slang-artifact-associated-impl.h"
 
 #include <assert.h>
 
@@ -179,7 +187,7 @@ Result linkAndOptimizeIR(
     auto targetRequest = codeGenContext->getTargetReq();
 
     // Get the artifact desc for the target 
-    const auto artifactDesc = ArtifactDesc::makeFromCompileTarget(asExternal(target));
+    const auto artifactDesc = ArtifactDescUtil::makeDescForCompileTarget(asExternal(target));
 
     // We start out by performing "linking" at the level of the IR.
     // This step will create a fresh IR module to be used for
@@ -203,21 +211,6 @@ Result linkAndOptimizeIR(
     // IR, then do it here, for the target-specific, but
     // un-specialized IR.
     dumpIRIfEnabled(codeGenContext, irModule);
-
-    switch (target)
-    {
-        case CodeGenTarget::CPPSource:
-        case CodeGenTarget::HostCPPSource:
-        {
-            lowerComInterfaces(irModule, artifactDesc.style, sink);
-            generateDllImportFuncs(irModule, sink);
-            break;
-        }
-        default: break;
-    }
-
-    // Lower `Result<T,E>` types into ordinary struct types.
-    lowerResultType(irModule, sink);
 
     // Replace any global constants with their values.
     //
@@ -314,6 +307,24 @@ Result linkAndOptimizeIR(
         break;
     }
 
+    lowerOptionalType(irModule, sink);
+    simplifyIR(irModule);
+
+    switch (target)
+    {
+    case CodeGenTarget::CPPSource:
+    case CodeGenTarget::HostCPPSource:
+    {
+        lowerComInterfaces(irModule, artifactDesc.style, sink);
+        generateDllImportFuncs(codeGenContext->getTargetReq(), irModule, sink);
+        generateDllExportFuncs(irModule, sink);
+        break;
+    }
+    default: break;
+    }
+
+    // Lower `Result<T,E>` types into ordinary struct types.
+    lowerResultType(irModule, sink);
 
     // Desguar any union types, since these will be illegal on
     // various targets.
@@ -365,10 +376,6 @@ Result linkAndOptimizeIR(
     if (sink->getErrorCount() != 0)
         return SLANG_FAIL;
 
-    lowerTuples(irModule, sink);
-    if (sink->getErrorCount() != 0)
-        return SLANG_FAIL;
-
     // TODO(DG): There are multiple DCE steps here, which need to be changed
     //   so that they don't just throw out any non-entry point code
     // Debugging code for IR transformations...
@@ -387,6 +394,7 @@ Result linkAndOptimizeIR(
     // will run a DCE pass to clean up after the specialization.
     //
     simplifyIR(irModule);
+
 #if 0
     dumpIRIfEnabled(codeGenContext, irModule, "AFTER DCE");
 #endif
@@ -741,6 +749,8 @@ Result linkAndOptimizeIR(
 #endif
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
+    cleanUpVoidType(irModule);
+
     // Lower all bit_cast operations on complex types into leaf-level
     // bit_cast on basic types.
     lowerBitCast(targetRequest, irModule);
@@ -827,17 +837,19 @@ Result linkAndOptimizeIR(
 #endif
     validateIRModuleIfEnabled(codeGenContext, irModule);
 
-    outLinkedIR.metadata = new PostEmitMetadata();
-    collectMetadata(irModule, *outLinkedIR.metadata);
+    auto metadata = new ArtifactPostEmitMetadata;
+    outLinkedIR.metadata = metadata;
+
+    collectMetadata(irModule, *metadata);
+
+    outLinkedIR.metadata = metadata;
 
     return SLANG_OK;
 }
 
-SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
-    String&                 outSource,
-    RefPtr<PostEmitMetadata>& outMetadata)
+SlangResult CodeGenContext::emitEntryPointsSourceFromIR(ComPtr<IArtifact>& outArtifact)
 {
-    outSource = String();
+    outArtifact.setNull();
 
     auto session = getSession();
     auto sink = getSink();
@@ -916,6 +928,7 @@ SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
 
     SLANG_RETURN_ON_FAIL(sourceEmitter->init());
 
+    ComPtr<IArtifactPostEmitMetadata> metadata;
     {
         LinkingAndOptimizationOptions linkingAndOptimizationOptions;
 
@@ -940,7 +953,7 @@ SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
 
         auto irModule = linkedIR.module;
 
-        outMetadata = linkedIR.metadata;
+        metadata = linkedIR.metadata;
 
         // After all of the required optimization and legalization
         // passes have been performed, we can emit target code from
@@ -1010,7 +1023,16 @@ SlangResult CodeGenContext::emitEntryPointsSourceFromIR(
     finalResult.append(code);
 
     // Write out the result
-    outSource = finalResult;
+
+    auto artifact = ArtifactUtil::createArtifactForCompileTarget(asExternal(target));
+    artifact->addRepresentationUnknown(StringBlob::moveCreate(finalResult));
+
+    if (metadata)
+    {
+        artifact->addAssociated(metadata);
+    }
+
+    outArtifact.swap(artifact);
     return SLANG_OK;
 }
 
@@ -1022,8 +1044,7 @@ SlangResult emitSPIRVFromIR(
 
 SlangResult emitSPIRVForEntryPointsDirectly(
     CodeGenContext* codeGenContext,
-    List<uint8_t>&  spirvOut,
-    RefPtr<PostEmitMetadata>& outMetadata)
+    ComPtr<IArtifact>& outArtifact)
 {
     // Outside because we want to keep IR in scope whilst we are processing emits
     LinkedIR linkedIR;
@@ -1036,13 +1057,20 @@ SlangResult emitSPIRVForEntryPointsDirectly(
     auto irModule = linkedIR.module;
     auto irEntryPoints = linkedIR.entryPoints;
 
-    emitSPIRVFromIR(codeGenContext, irModule, irEntryPoints, spirvOut);
+    List<uint8_t> spirv;
+    emitSPIRVFromIR(codeGenContext, irModule, irEntryPoints, spirv);
 
-    outMetadata = linkedIR.metadata;
+    auto artifact = ArtifactUtil::createArtifactForCompileTarget(asExternal(codeGenContext->getTargetFormat()));
+    artifact->addRepresentationUnknown(ListBlob::moveCreate(spirv));
+
+    if (linkedIR.metadata)
+    {
+        artifact->addAssociated(linkedIR.metadata);
+    }
+
+    outArtifact.swap(artifact);
 
     return SLANG_OK;
 }
-
-
 
 } // namespace Slang

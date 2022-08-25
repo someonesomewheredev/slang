@@ -12,6 +12,9 @@
     <ClInclude Include="..\..\..\slang.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\..\source\slang\slang-artifact-output-util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ast-all.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -132,6 +135,9 @@
     <ClInclude Include="..\..\..\source\slang\slang-ir-byte-address-legalize.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\..\source\slang\slang-ir-cleanup-void.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-clone.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -151,6 +157,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-diff-jvp.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\slang\slang-ir-dll-export.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-dll-import.h">
@@ -187,6 +196,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-glsl-liveness.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\slang\slang-ir-hoist-constants.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-hoist-local-types.h">
@@ -238,6 +250,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-lower-generics.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\..\source\slang\slang-ir-lower-optional-type.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\..\source\slang\slang-ir-lower-reinterpret.h">
@@ -482,6 +497,9 @@
     <ClCompile Include="..\..\..\source\slang\slang-api.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\source\slang\slang-artifact-output-util.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ast-builder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -501,6 +519,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ast-substitutions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\slang\slang-ast-support-types.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ast-type.cpp">
@@ -608,6 +629,9 @@
     <ClCompile Include="..\..\..\source\slang\slang-ir-byte-address-legalize.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\source\slang\slang-ir-cleanup-void.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-clone.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -630,6 +654,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-diff-jvp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\slang\slang-ir-dll-export.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-dll-import.cpp">
@@ -666,6 +693,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-glsl-liveness.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\slang\slang-ir-hoist-constants.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-hoist-local-types.cpp">
@@ -711,6 +741,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-lower-generics.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\..\source\slang\slang-ir-lower-optional-type.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\..\source\slang\slang-ir-lower-reinterpret.cpp">
@@ -935,6 +968,9 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\source\slang\core.meta.slang">
+      <Filter>Source Files</Filter>
+    </None>
+    <None Include="..\..\..\source\slang\diff.meta.slang">
       <Filter>Source Files</Filter>
     </None>
     <None Include="..\..\..\source\slang\hlsl.meta.slang">

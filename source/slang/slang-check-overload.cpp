@@ -86,7 +86,7 @@ namespace Slang
             getSink()->diagnose(context.originalExpr, Diagnostics::newCanOnlyBeUsedToInitializeAClass);
             return false;
         }
-        if (!isNewExpr && isClassType)
+        if (!isNewExpr && isClassType && context.originalExpr)
         {
             getSink()->diagnose(context.originalExpr, Diagnostics::classCanOnlyBeInitializedWithNew);
             return false;
@@ -314,14 +314,10 @@ namespace Slang
                 // If we have an argument to work with, then we will
                 // try to extract its speicalization-time constant value.
                 //
-                // TODO: This is one of the places where we will need to
-                // generalize in order to support generic value parameters
-                // with types other than `int`.
-                //
                 Val* val = nullptr;
                 if( arg )
                 {
-                    val = ExtractGenericArgInteger(arg, context.mode == OverloadResolveContext::Mode::JustTrying ? nullptr : getSink());
+                    val = ExtractGenericArgInteger(arg, getType(m_astBuilder, valParamRef), context.mode == OverloadResolveContext::Mode::JustTrying ? nullptr : getSink());
                 }
 
                 // If any of the above checking steps fail and we don't
@@ -1242,7 +1238,9 @@ namespace Slang
             m_astBuilder,
             this,
             getName("$init"),
-            type);
+            type,
+            LookupMask::Default,
+            LookupOptions::NoDeref);
 
         AddOverloadCandidates(initializers, context);
     }
@@ -1438,6 +1436,18 @@ namespace Slang
 
         for (auto& arg : expr->arguments)
         {
+            arg = maybeOpenRef(arg);
+        }
+
+        auto funcType = as<FuncType>(funcExprType);
+        for (Index i = 0; i < expr->arguments.getCount(); i++)
+        {
+            auto& arg = expr->arguments[i];
+            if (funcType && i < (Index)funcType->getParamCount())
+            {
+                if (funcType->getParamDirection(i) == kParameterDirection_Out)
+                    continue;
+            }
             arg = maybeOpenExistential(arg);
         }
 

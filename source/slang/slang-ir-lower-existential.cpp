@@ -4,6 +4,7 @@
 #include "slang-ir-generics-lowering-context.h"
 #include "slang-ir.h"
 #include "slang-ir-insts.h"
+#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -24,6 +25,8 @@ namespace Slang
             auto valueType = sharedContext->lowerType(builder, value->getDataType());
             auto witnessTableType = cast<IRWitnessTableTypeBase>(inst->getWitnessTable()->getDataType());
             auto interfaceType = witnessTableType->getConformanceType();
+            if (interfaceType->findDecoration<IRComInterfaceDecoration>())
+                return;
             auto witnessTableIdType = builder->getWitnessTableIDType((IRType*)interfaceType);
             auto anyValueSize = sharedContext->getInterfaceAnyValueSize(interfaceType, inst->sourceLoc);
             auto anyValueType = builder->getAnyValueType(anyValueSize);
@@ -139,7 +142,10 @@ namespace Slang
             IRBuilder builderStorage(sharedContext->sharedBuilderStorage);
             auto builder = &builderStorage;
             builder->setInsertBefore(inst);
-
+            if (inst->getDataType()->getOp() == kIROp_ClassType)
+            {
+                return;
+            }
             // A value of interface will lower as a tuple, and
             // the third element of that tuple represents the
             // concrete value that was put into the existential.

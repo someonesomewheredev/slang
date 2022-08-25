@@ -178,7 +178,9 @@
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
     <PostBuildEvent>
-      <Command>"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x86/" "../../../bin/windows-x86/debug/"</Command>
+      <Command>IF EXIST "$(SolutionDir)tools\gfx\gfx.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x86\debug" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x86\debug" &gt; nul)
+IF EXIST "$(SolutionDir)tools\gfx\slang.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x86\debug" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x86\debug" &gt; nul)
+"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x86/" "../../../bin/windows-x86/debug/"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -199,7 +201,9 @@
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
     <PostBuildEvent>
-      <Command>"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x64/" "../../../bin/windows-x64/debug/"</Command>
+      <Command>IF EXIST "$(SolutionDir)tools\gfx\gfx.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x64\debug" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x64\debug" &gt; nul)
+IF EXIST "$(SolutionDir)tools\gfx\slang.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x64\debug" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x64\debug" &gt; nul)
+"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x64/" "../../../bin/windows-x64/debug/"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug aarch64|ARM'">
@@ -220,7 +224,9 @@
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
     <PostBuildEvent>
-      <Command>"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/aarch64/" "../../../bin/windows-aarch64/debug/"</Command>
+      <Command>IF EXIST "$(SolutionDir)tools\gfx\gfx.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-aarch64\debug" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-aarch64\debug" &gt; nul)
+IF EXIST "$(SolutionDir)tools\gfx\slang.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-aarch64\debug" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-aarch64\debug" &gt; nul)
+"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/aarch64/" "../../../bin/windows-aarch64/debug/"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -245,7 +251,9 @@
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
     <PostBuildEvent>
-      <Command>"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x86/" "../../../bin/windows-x86/release/"</Command>
+      <Command>IF EXIST "$(SolutionDir)tools\gfx\gfx.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x86\release" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x86\release" &gt; nul)
+IF EXIST "$(SolutionDir)tools\gfx\slang.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x86\release" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x86\release" &gt; nul)
+"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x86/" "../../../bin/windows-x86/release/"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -270,7 +278,9 @@
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
     <PostBuildEvent>
-      <Command>"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x64/" "../../../bin/windows-x64/release/"</Command>
+      <Command>IF EXIST "$(SolutionDir)tools\gfx\gfx.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x64\release" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-x64\release" &gt; nul)
+IF EXIST "$(SolutionDir)tools\gfx\slang.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x64\release" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-x64\release" &gt; nul)
+"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/x64/" "../../../bin/windows-x64/release/"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release aarch64|ARM'">
@@ -295,15 +305,41 @@
       <TreatLinkerWarningAsErrors>true</TreatLinkerWarningAsErrors>
     </Link>
     <PostBuildEvent>
-      <Command>"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/aarch64/" "../../../bin/windows-aarch64/release/"</Command>
+      <Command>IF EXIST "$(SolutionDir)tools\gfx\gfx.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-aarch64\release" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\gfx.slang" "..\..\..\bin\windows-aarch64\release" &gt; nul)
+IF EXIST "$(SolutionDir)tools\gfx\slang.slang"\ (xcopy /Q /E /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-aarch64\release" &gt; nul) ELSE (xcopy /Q /Y /I "$(SolutionDir)tools\gfx\slang.slang" "..\..\..\bin\windows-aarch64\release" &gt; nul)
+"$(SolutionDir)tools\copy-hlsl-libs.bat" "$(WindowsSdkDir)Redist/D3D/aarch64/" "../../../bin/windows-aarch64/release/"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="..\..\..\slang-gfx.h" />
     <ClInclude Include="..\..\..\tools\gfx\command-encoder-com-forward.h" />
     <ClInclude Include="..\..\..\tools\gfx\command-writer.h" />
-    <ClInclude Include="..\..\..\tools\gfx\cpu\render-cpu.h" />
-    <ClInclude Include="..\..\..\tools\gfx\cuda\render-cuda.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-base.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-buffer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-device.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-helper-functions.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-pipeline-state.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-query.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-resource-views.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-shader-object-layout.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-shader-object.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-shader-program.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cpu\cpu-texture.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-base.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-buffer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-command-buffer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-command-encoder.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-command-queue.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-context.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-device.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-helper-functions.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-pipeline-state.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-query.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-resource-views.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-shader-object-layout.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-shader-object.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-shader-program.h" />
+    <ClInclude Include="..\..\..\tools\gfx\cuda\cuda-texture.h" />
     <ClInclude Include="..\..\..\tools\gfx\d3d\d3d-swapchain.h" />
     <ClInclude Include="..\..\..\tools\gfx\d3d\d3d-util.h" />
     <ClInclude Include="..\..\..\tools\gfx\d3d11\d3d11-base.h" />
@@ -347,7 +383,27 @@
     <ClInclude Include="..\..\..\tools\gfx\d3d12\d3d12-texture.h" />
     <ClInclude Include="..\..\..\tools\gfx\d3d12\d3d12-transient-heap.h" />
     <ClInclude Include="..\..\..\tools\gfx\d3d12\d3d12-vertex-layout.h" />
-    <ClInclude Include="..\..\..\tools\gfx\debug-layer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-base.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-buffer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-command-buffer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-command-encoder.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-command-queue.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-device.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-fence.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-framebuffer.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-helper-functions.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-pipeline-state.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-query.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-render-pass.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-resource-views.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-sampler-state.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-shader-object.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-shader-program.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-shader-table.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-swap-chain.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-texture.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-transient-heap.h" />
+    <ClInclude Include="..\..\..\tools\gfx\debug-layer\debug-vertex-layout.h" />
     <ClInclude Include="..\..\..\tools\gfx\flag-combiner.h" />
     <ClInclude Include="..\..\..\tools\gfx\immediate-renderer-base.h" />
     <ClInclude Include="..\..\..\tools\gfx\mutable-shader-object.h" />
@@ -389,8 +445,27 @@
     <ClInclude Include="..\..\..\tools\gfx\vulkan\vk-vertex-layout.h" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="..\..\..\tools\gfx\cpu\render-cpu.cpp" />
-    <ClCompile Include="..\..\..\tools\gfx\cuda\render-cuda.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-buffer.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-device.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-helper-functions.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-pipeline-state.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-query.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-resource-views.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-shader-object-layout.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-shader-object.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cpu\cpu-texture.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-buffer.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-command-buffer.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-command-encoder.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-command-queue.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-device.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-helper-functions.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-pipeline-state.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-query.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-shader-object-layout.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-shader-object.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-shader-program.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\cuda\cuda-texture.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\d3d\d3d-swapchain.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\d3d\d3d-util.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\d3d11\d3d11-buffer.cpp" />
@@ -425,7 +500,22 @@
     <ClCompile Include="..\..\..\tools\gfx\d3d12\d3d12-swap-chain.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\d3d12\d3d12-texture.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\d3d12\d3d12-transient-heap.cpp" />
-    <ClCompile Include="..\..\..\tools\gfx\debug-layer.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-buffer.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-command-buffer.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-command-encoder.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-command-queue.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-device.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-fence.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-helper-functions.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-pipeline-state.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-query.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-resource-views.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-sampler-state.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-shader-object.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-shader-program.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-swap-chain.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-texture.cpp" />
+    <ClCompile Include="..\..\..\tools\gfx\debug-layer\debug-transient-heap.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\flag-combiner.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\immediate-renderer-base.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\nvapi\nvapi-util.cpp" />
@@ -459,6 +549,10 @@
     <ClCompile Include="..\..\..\tools\gfx\vulkan\vk-texture.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\vulkan\vk-transient-heap.cpp" />
     <ClCompile Include="..\..\..\tools\gfx\vulkan\vk-util.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\tools\gfx\gfx.slang" />
+    <None Include="..\..\..\tools\gfx\slang.slang" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\core\core.vcxproj">

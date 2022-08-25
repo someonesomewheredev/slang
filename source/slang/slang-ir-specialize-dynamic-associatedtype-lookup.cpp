@@ -3,6 +3,7 @@
 #include "slang-ir-generics-lowering-context.h"
 #include "slang-ir-insts.h"
 #include "slang-ir.h"
+#include "slang-ir-util.h"
 
 namespace Slang
 {
@@ -168,25 +169,15 @@ struct AssociatedTypeLookupSpecializationContext
 
     void processGetSequentialIDInst(IRGetSequentialID* inst)
     {
-        if (inst->getRTTIOperand()->getDataType()->getOp() == kIROp_WitnessTableIDType)
-        {
-            // If the operand is a witness table id, just return the operand.
-            inst->replaceUsesWith(inst->getRTTIOperand());
-            inst->removeAndDeallocate();
-        }
-        else if (inst->getRTTIOperand()->getDataType()->getOp() == kIROp_VectorType)
-        {
-            // If the operand is a witness table, it is already replaced with a uint2
-            // at this point, where the first element in the uint2 is the id of the
-            // witness table.
-            auto vectorType = inst->getRTTIOperand()->getDataType();
-            IRBuilder builder(sharedContext->sharedBuilderStorage);
-            builder.setInsertBefore(inst);
-            UInt index = 0;
-            auto id = builder.emitSwizzle(as<IRVectorType>(vectorType)->getElementType(), inst->getRTTIOperand(), 1, &index);
-            inst->replaceUsesWith(id);
-            inst->removeAndDeallocate();
-        }
+        // If the operand is a witness table, it is already replaced with a uint2
+        // at this point, where the first element in the uint2 is the id of the
+        // witness table.
+        IRBuilder builder(sharedContext->sharedBuilderStorage);
+        builder.setInsertBefore(inst);
+        UInt index = 0;
+        auto id = builder.emitSwizzle(builder.getUIntType(), inst->getRTTIOperand(), 1, &index);
+        inst->replaceUsesWith(id);
+        inst->removeAndDeallocate();
     }
 
     void processModule()
@@ -208,9 +199,12 @@ struct AssociatedTypeLookupSpecializationContext
                 auto seqId = inst->findDecoration<IRSequentialIDDecoration>();
                 SLANG_ASSERT(seqId);
                 // Insert code to pack sequential ID into an uint2 at all use sites.
-                for (auto use = inst->firstUse; use; )
+                IRUse* nextUse = nullptr;
+                for (auto use = inst->firstUse; use; use = nextUse)
                 {
-                    auto nextUse = use->nextUse;
+                    nextUse = use->nextUse;
+                    if (as<IRCOMWitnessDecoration>(use->getUser()))
+                        continue;
                     IRBuilder builder(sharedContext->sharedBuilderStorage);
                     builder.setInsertBefore(use->getUser());
                     auto uint2Type = builder.getVectorType(
@@ -222,7 +216,6 @@ struct AssociatedTypeLookupSpecializationContext
                     use->set(uint2seqID);
                     use = nextUse;
                 }
-                inst->replaceUsesWith(seqId->getSequentialIDOperand());
             }
         });
 
